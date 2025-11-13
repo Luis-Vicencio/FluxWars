@@ -1,0 +1,66 @@
+<!-- index.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magnetic Board</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Magnetic Board Game</h1>
+
+    <!-- MAIN MENU -->
+    <div id="mainMenu" class="menu-screen">
+        <h2>Welcome to the Magnetic Board Game</h2>
+        <button id="startGameBtn">▶ Start Game</button>
+        <button id="settingsBtn">⚙ Settings</button>
+        <button id="helpBtn">❓ Help</button>
+        <button id="aboutBtn">ℹ About</button>
+    </div>
+
+    <!-- GAME SCREEN (hidden until Start Game) -->
+    <div id="gameContainer" style="display: none;">
+        <h2 id="status">
+            Player {{ state.current_player }}'s Turn
+            (Phase: {{ state.phase.replace('_', ' ') }})
+        </h2>
+
+
+        <div class="container">
+            <div class="board" id="board">
+                {% for r in range(board|length) %}
+                    <div class="row">
+                        {% for c in range(board[r]|length) %}
+                            {% set cell = board[r][c] %}
+                            <div
+                                class="cell
+                                {% if cell == 1 %}player1{% elif cell == 2 %}player2{% elif cell == 3 %}neutral{% endif %}"
+                                data-row="{{ r }}"
+                                data-col="{{ c }}">
+                                <span class="polarity">{{ polarities[r][c] }}</span>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <button id="rotateBtn">🔄 Rotate Piece (<span id="orientationLabel">0°</span>)</button>
+        <button id="rollDiceBtn" style="display: none;">🎲 Roll Dice</button>
+        <p id="diceResult"></p>
+    </div>
+
+    <!-- POPUP MODALS -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span id="closeModal" class="close">&times;</span>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
