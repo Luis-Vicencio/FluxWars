@@ -45,7 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("aboutBtn").addEventListener("click", () => {
         showModal(`
             <h3>About</h3>
-            <p><strong>Magnetic Board Game</strong><br>
+            <p><strong>Flux Wars</strong><br>
             Created with Flask, HTML, and JavaScript.<br>
             Inspired by the dynamics of magnetic fields.</p>
         `);

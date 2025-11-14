@@ -10,4 +10,5 @@ How to Play
    cd FluxWars
 2. Type in Terminal
     ```bash
+    pip install flask
     python app.py
