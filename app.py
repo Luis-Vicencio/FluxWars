@@ -1,20 +1,21 @@
-#app.py
+# app.py
 
 from flask import Flask, render_template, request, jsonify
 from board import (
     get_board,
     get_state,
+    get_state_serializable,
     toggle_piece,
     get_polarities,
     reset_board,
     roll_dice,
     find_cluster,
     can_move_cluster,
-    move_cluster,
-    get_dice
+    get_dice,
 )
 
 app = Flask(__name__)
+
 
 @app.route("/")
 def index():
@@ -22,46 +23,91 @@ def index():
         "index.html",
         board=get_board(),
         polarities=get_polarities(),
-        state=get_state()
+        state=get_state_serializable(),
     )
+
 
 # --- Placement Phase ---
 @app.route("/toggle", methods=["POST"])
 def toggle():
-    data = request.get_json()
-    row, col = data["row"], data["col"]
-    orientation = int(data["orientation"])
+    try:
+        data = request.get_json()
+        row, col = data["row"], data["col"]
+        orientation = int(data["orientation"])
 
-    success, message = toggle_piece(row, col, orientation)
+        success, message = toggle_piece(row, col, orientation)
 
-    return jsonify({
-        "success": success,
-        "message": message,
-        "board": get_board(),
-        "polarities": get_polarities(),
-        "state": get_state()
-    })
+        return jsonify(
+            {
+                "success": success,
+                "message": message,
+                "board": get_board(),
+                "polarities": get_polarities(),
+                "state": get_state_serializable(),
+            }
+        )
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        # return error to client for easier debugging
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during toggle: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
+
 
 @app.route("/reset", methods=["POST"])
 def reset():
     reset_board()
-    return jsonify({
-        "success": True,
-        "message": "Board reset.",
-        "board": get_board(),
-        "polarities": get_polarities(),
-        "state": get_state()
-    })
+    return jsonify(
+        {
+            "success": True,
+            "message": "Board reset.",
+            "board": get_board(),
+            "polarities": get_polarities(),
+            "state": get_state_serializable(),
+        }
+    )
+
 
 # --- Movement Phase ---
 @app.route("/roll_dice", methods=["POST"])
 def roll_dice_route():
-    from board import roll_dice, get_dice  # import inside to avoid circular issues
-    value = roll_dice()
-    return jsonify({
-        "success": True,
-        "dice": value
-    })
+    # roll the dice; do NOT switch player here — player keeps the turn until moves exhausted
+    try:
+        from board import roll_dice, get_board, get_polarities, get_state, next_player
+
+        value = roll_dice()
+        # note: do NOT switch player here
+        return jsonify({
+            "success": True,
+            "dice": value,
+            "board": get_board(),
+            "polarities": get_polarities(),
+            "state": get_state_serializable(),
+        })
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during roll_dice: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
+
 
 @app.route("/select_cluster", methods=["POST"])
 def select_cluster_route():
@@ -70,37 +116,89 @@ def select_cluster_route():
     cluster = find_cluster(row, col)
     return jsonify({"cluster": cluster})
 
+
 @app.route("/move_cluster", methods=["POST"])
 def move_cluster_route():
-    data = request.get_json()
-    cluster = data["cluster"]
-    dr = data["dr"]
-    dc = data["dc"]
-    remaining_moves = data.get("remaining_moves", 0)
+    try:
+        data = request.get_json()
+        cluster = data["cluster"]
+        dr = data["dr"]
+        dc = data["dc"]
+        # Do NOT switch player on roll; player keeps the turn until they exhaust moves.
+        remaining_moves = data.get("remaining_moves", None)
+        from board import move_cluster_cells, get_board, get_polarities, get_state, next_player
 
-    from board import move_cluster_cells, get_board, get_polarities, get_state, next_player
+        # actor is the player who is making this move (before any next_player call)
+        state_before = get_state()
+        actor = state_before["current_player"]
 
-    success, message = move_cluster_cells(cluster, dr, dc)
+        success, message = move_cluster_cells(cluster, dr, dc, actor_player=actor)
 
-    state = get_state()
+        state = get_state()
 
-    if success and remaining_moves <= 1:
-        # Player ran out of moves → switch turn
-        next_player()
-        message = "Turn ended. Next player's turn."
+        # Only switch player when remaining_moves is provided and the player has exhausted moves
+        if success and remaining_moves is not None and remaining_moves <= 0:
+            next_player()
+            message = "Turn ended. Next player's turn."
 
-    return jsonify({
-        "success": success,
-        "message": message,
-        "board": get_board(),
-        "polarities": get_polarities(),
-        "state": get_state()
-    })
+        return jsonify(
+            {
+                "success": success,
+                "message": message,
+                "board": get_board(),
+                "polarities": get_polarities(),
+                "state": get_state_serializable(),
+            }
+        )
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during move_cluster: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
 
 
 @app.route("/get_dice", methods=["GET"])
 def get_dice_route():
     return jsonify({"dice": get_dice()})
+
+
+@app.route("/end_turn", methods=["POST"])
+def end_turn_route():
+    try:
+        from board import next_player, get_board, get_polarities, get_state_serializable
+
+        next_player()
+        return jsonify({
+            "success": True,
+            "message": "Turn ended by player.",
+            "board": get_board(),
+            "polarities": get_polarities(),
+            "state": get_state_serializable(),
+        })
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during end_turn: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
+
 
 if __name__ == "__main__":
     app.run(debug=True)

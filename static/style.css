@@ -17,6 +17,68 @@ h1 {
     margin-bottom: 20px; /* adds space before the button */
 }
 
+/* Turn banner */
+.turn-banner {
+    font-size: 1.1rem;
+    font-weight: 700;
+    padding: 10px 16px;
+    border-radius: 8px;
+    display: inline-block;
+    margin-bottom: 8px;
+    color: white;
+    background: linear-gradient(90deg, #2b6cb0, #2b6cb0);
+}
+
+/* Side panel and move history */
+.side-panel {
+    position: absolute;
+    right: 24px;
+    top: 120px;
+    width: 220px;
+    background: #fff;
+    border: 1px solid #ddd;
+    padding: 12px;
+    border-radius: 8px;
+    text-align: left;
+}
+.move-history {
+    max-height: 360px;
+    overflow-y: auto;
+    font-size: 0.95rem;
+}
+.move-history .entry {
+    padding: 6px 8px;
+    border-bottom: 1px dashed #eee;
+}
+
+/* Dice animation */
+.dice-anim {
+    width: 36px;
+    height: 36px;
+    display: inline-block;
+    margin-left: 8px;
+}
+.dice-rolling {
+    animation: diceSpin 0.8s linear infinite;
+}
+@keyframes diceSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Converted cell highlight */
+.cell.converted {
+    box-shadow: 0 0 10px 3px rgba(255, 215, 0, 0.9) inset;
+    transform: scale(1.1);
+    transition: transform 0.25s ease, box-shadow 0.4s ease;
+}
+
+/* Disabled button style */
+button[disabled], .button-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .row {
     display: flex;
 }

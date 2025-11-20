@@ -21,11 +21,9 @@
 
     <!-- GAME SCREEN (hidden until Start Game) -->
     <div id="gameContainer" style="display: none;">
-        <h2 id="status">
-            Player {{ state.current_player }}'s Turn
-            (Phase: {{ state.phase.replace('_', ' ') }})
-        </h2>
+        <div id="turnBanner" class="turn-banner">Player {{ state.current_player }}'s Turn</div>
 
+        <h2 id="status">(Phase: {{ state.phase.replace('_', ' ') }})</h2>
 
         <div class="container">
             <div class="board" id="board">
@@ -45,10 +43,20 @@
                 {% endfor %}
             </div>
         </div>
+        <div class="controls">
+            <button id="rotateBtn">🔄 Rotate Piece (<span id="orientationLabel">0°</span>)</button>
+            <div class="dice-wrap">
+                <button id="rollDiceBtn" style="display: none;" class="dice-btn">🎲 Roll Dice</button>
+                <div id="diceAnim" class="dice-anim" aria-hidden="true"></div>
+                <p id="diceResult"></p>
+            </div>
+            <button id="endTurnBtn" style="display:none;">⏭️ End Turn</button>
+        </div>
 
-        <button id="rotateBtn">🔄 Rotate Piece (<span id="orientationLabel">0°</span>)</button>
-        <button id="rollDiceBtn" style="display: none;">🎲 Roll Dice</button>
-        <p id="diceResult"></p>
+        <div id="sidePanel" class="side-panel">
+            <h3>Move History</h3>
+            <div id="moveHistory" class="move-history"></div>
+        </div>
     </div>
 
     <!-- POPUP MODALS -->

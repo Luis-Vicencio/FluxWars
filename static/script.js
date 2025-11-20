@@ -5,6 +5,7 @@ let ghostCells = [];
 let selectedCluster = [];
 let diceValue = 0;
 let currentPhase = "home_setup";
+let lastBoard = null; // snapshot for detecting conversions
 
 // ======================= MAIN SETUP =======================
 
@@ -126,11 +127,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- ROLL DICE ---
     rollDiceBtn.addEventListener("click", async () => {
+        const diceAnim = document.getElementById('diceAnim');
+        diceAnim.classList.add('dice-rolling');
+        // small delay to show animation for better UX
         const res = await fetch("/roll_dice", { method: "POST" });
         const data = await res.json();
+        diceAnim.classList.remove('dice-rolling');
         if (data.success) {
             diceValue = data.dice;
             diceResult.textContent = `🎲 You rolled a ${diceValue}`;
+            addHistoryEntry(`Player rolled ${diceValue}`);
+            // Update UI to reflect new turn/board state returned by server
+            if (data.state) updateStatus(data.state);
+            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
         } else {
             diceResult.textContent = "❌ Dice roll failed.";
         }
@@ -149,11 +158,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const res = await fetch("/move_cluster", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cluster: selectedCluster, dr, dc }),
+            // send remaining_moves so server knows when to switch turns
+            body: JSON.stringify({ cluster: selectedCluster, dr, dc, remaining_moves: diceValue - 1 }),
         });
         const data = await res.json();
         if (data.success) {
+            addHistoryEntry(`Moved cluster by (${dr},${dc})`);
             updateBoard(data.board, data.polarities, data.state?.phase || "main");
+            if (data.state) updateStatus(data.state);
             selectedCluster = data.new_cluster || selectedCluster.map(([r, c]) => [r + dr, c + dc]);
             highlightCluster(selectedCluster);
             diceValue -= 1;
@@ -208,6 +220,31 @@ function updateBoard(board, polarities, phase = "setup") {
         }
         boardDiv.appendChild(rowDiv);
     }
+
+    // If we have a snapshot of the previous board, detect converted neutral -> player changes
+    if (lastBoard) {
+        const converted = [];
+        for (let r = 0; r < board.length; r++) {
+            for (let c = 0; c < board[r].length; c++) {
+                if (lastBoard[r] && lastBoard[r][c] === 3 && board[r][c] !== 3) {
+                    // neutral converted to player 1 or 2
+                    converted.push([r, c]);
+                }
+            }
+        }
+        // animate converted cells
+        converted.forEach(([r, c]) => {
+            const cell = document.querySelector(`.cell[data-row='${r}'][data-col='${c}']`);
+            if (cell) {
+                cell.classList.add('converted');
+                setTimeout(() => cell.classList.remove('converted'), 700);
+            }
+        });
+        if (converted.length) addHistoryEntry(`Captured ${converted.length} neutral piece(s)`);
+    }
+
+    // update lastBoard snapshot
+    lastBoard = board.map(row => row.slice());
 }
 
 // ======================= STATUS =======================
@@ -215,7 +252,19 @@ function updateBoard(board, polarities, phase = "setup") {
 function updateStatus(state) {
     const status = document.getElementById("status");
     const rollDiceBtn = document.getElementById("rollDiceBtn");
+    const endTurnBtn = document.getElementById('endTurnBtn');
+    const turnBanner = document.getElementById('turnBanner');
     currentPhase = state.phase;
+
+    // update turn banner color and text
+    if (turnBanner) {
+        turnBanner.textContent = `Player ${state.current_player}'s Turn`;
+        if (state.current_player === 1) {
+            turnBanner.style.background = 'linear-gradient(90deg, #2b6cb0, #2b6cb0)';
+        } else if (state.current_player === 2) {
+            turnBanner.style.background = 'linear-gradient(90deg, #e53e3e, #e53e3e)';
+        }
+    }
 
     if (state.phase === "home_setup") {
         status.textContent = `Player ${state.current_player}'s Turn (Home Setup) — Place your HOME piece on your own side.`;
@@ -228,11 +277,125 @@ function updateStatus(state) {
     else if (state.phase === "main") {
         status.textContent = `Player ${state.current_player}'s Turn (Main Phase) — Roll dice, Click on piece, and move with arrow keys.`;
         rollDiceBtn.style.display = "inline-block";
+        endTurnBtn.style.display = 'inline-block';
     } 
     else {
         status.textContent = `Player ${state.current_player}'s Turn (Phase: ${state.phase})`;
         rollDiceBtn.style.display = "none";
+        if (endTurnBtn) endTurnBtn.style.display = 'none';
     }
+
+    // If winner declared, trigger animation
+    if (state.winner) {
+        showWinnerAnimation(state.winner);
+    }
+}
+
+// Move history helper
+function addHistoryEntry(text) {
+    const history = document.getElementById('moveHistory');
+    if (!history) return;
+    const div = document.createElement('div');
+    div.className = 'entry';
+    const t = document.createElement('div');
+    t.textContent = `${new Date().toLocaleTimeString()} — ${text}`;
+    div.appendChild(t);
+    history.prepend(div);
+}
+
+// End Turn handler: call server to force end turn
+document.addEventListener('DOMContentLoaded', () => {
+    const endTurnBtn = document.getElementById('endTurnBtn');
+    if (endTurnBtn) {
+        endTurnBtn.addEventListener('click', async () => {
+            const res = await fetch('/end_turn', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                updateBoard(data.board, data.polarities, data.state.phase);
+                updateStatus(data.state);
+                addHistoryEntry('Player ended turn early');
+                diceValue = 0;
+                const diceResult = document.getElementById('diceResult');
+                if (diceResult) diceResult.textContent = '';
+            } else {
+                alert('Failed to end turn');
+            }
+        });
+    }
+});
+
+// Simple winner animation overlay
+function showWinnerAnimation(player) {
+    if (document.getElementById('winnerOverlay')) return; // already showing
+    const colors = {1: '#2b6cb0', 2: '#e53e3e'}; // blue, red
+    const overlay = document.createElement('div');
+    overlay.id = 'winnerOverlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '9999';
+    overlay.style.background = 'rgba(0,0,0,0.4)';
+
+    const box = document.createElement('div');
+    box.style.padding = '30px 40px';
+    box.style.borderRadius = '12px';
+    box.style.color = 'white';
+    box.style.fontSize = '2rem';
+    box.style.fontWeight = '700';
+    box.style.textAlign = 'center';
+    box.style.background = colors[player] || '#000';
+    box.textContent = `Player ${player} wins!`;
+
+    const br = document.createElement('div');
+    br.style.height = '16px';
+    box.appendChild(br);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Reset Game';
+    resetBtn.style.marginTop = '12px';
+    resetBtn.style.padding = '8px 14px';
+    resetBtn.style.fontSize = '1rem';
+    resetBtn.style.border = 'none';
+    resetBtn.style.borderRadius = '8px';
+    resetBtn.style.cursor = 'pointer';
+    resetBtn.onclick = async () => {
+        // call server reset endpoint
+        const res = await fetch('/reset', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            // remove overlay and update board/status
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            updateBoard(data.board, data.polarities, data.state.phase);
+            updateStatus(data.state);
+        } else {
+            alert('Reset failed');
+        }
+    };
+    box.appendChild(resetBtn);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    // simple pulse effect
+    let scale = 1;
+    let dir = 1;
+    const iv = setInterval(() => {
+        scale += dir * 0.02;
+        if (scale > 1.06) dir = -1;
+        if (scale < 0.96) dir = 1;
+        box.style.transform = `scale(${scale})`;
+    }, 30);
+
+    // remove after 7 seconds
+    setTimeout(() => {
+        clearInterval(iv);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }, 7000);
 }
 
 // ======================= GHOST PREVIEW =======================
