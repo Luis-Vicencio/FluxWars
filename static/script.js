@@ -140,6 +140,15 @@ document.addEventListener("DOMContentLoaded", () => {
             // Update UI to reflect new turn/board state returned by server
             if (data.state) updateStatus(data.state);
             if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
+            // If server indicates steal opportunity (rolled a 6), show steal UI
+            if (data.steal_targets && data.steal_targets.length) {
+                showStealOptions(data.steal_targets);
+            } else if (data.steal_targets && data.steal_targets.length === 0 && data.dice === 6) {
+                // rolled a 6 but no targets
+                addHistoryEntry('Rolled 6 but no stealable neutrals available');
+                // optionally notify player
+                showModal('<h3>No steal targets</h3><p>There are no eligible neutral pieces adjacent to opponent clusters to steal.</p>');
+            }
         } else {
             diceResult.textContent = "❌ Dice roll failed.";
         }
@@ -245,6 +254,73 @@ function updateBoard(board, polarities, phase = "setup") {
 
     // update lastBoard snapshot
     lastBoard = board.map(row => row.slice());
+}
+
+
+// Show steal options in the modal; targets is array of [r,c]
+function showStealOptions(targets) {
+    const body = document.getElementById('modalBody');
+    if (!body) return;
+    // highlight stealable cells on board
+    document.querySelectorAll('.cell.stealable').forEach(c => c.classList.remove('stealable'));
+    targets.forEach(([r,c]) => {
+        const cell = document.querySelector(`.cell[data-row='${r}'][data-col='${c}']`);
+        if (cell) cell.classList.add('stealable');
+    });
+
+    // build list in modal
+    let html = '<h3>Steal Opportunity!</h3>';
+    html += '<p>Select a neutral piece to steal (or close to skip):</p>';
+    html += '<div class="steal-list">';
+    targets.forEach(([r,c]) => {
+        html += `<div class="target" data-row="${r}" data-col="${c}">Neutral at (${r}, ${c})</div>`;
+    });
+    html += '</div>';
+    html += '<div class="steal-actions"><button id="stealCloseBtn">Close</button></div>';
+    body.innerHTML = html;
+    const modal = document.getElementById('modal');
+    modal.style.display = 'block';
+
+    // attach handlers
+    document.querySelectorAll('.steal-list .target').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            const r = el.getAttribute('data-row');
+            const c = el.getAttribute('data-col');
+            // call server to perform steal
+            const res = await fetch('/steal', {
+                method: 'POST',
+                headers: { 'Content-Type':'application/json' },
+                body: JSON.stringify({ row: parseInt(r), col: parseInt(c) })
+            });
+            const data = await res.json();
+            // remove highlights
+            document.querySelectorAll('.cell.stealable').forEach(cel => cel.classList.remove('stealable'));
+            modal.style.display = 'none';
+            if (data.success) {
+                addHistoryEntry('Stole neutral piece');
+                // animate converted cells if server provided them
+                if (data.converted && data.converted.length) {
+                    data.converted.forEach(([rr, cc]) => {
+                        const cell = document.querySelector(`.cell[data-row='${rr}'][data-col='${cc}']`);
+                        if (cell) {
+                            cell.classList.add('converted');
+                            setTimeout(() => cell.classList.remove('converted'), 700);
+                        }
+                    });
+                }
+                if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
+                if (data.state) updateStatus(data.state);
+            } else {
+                alert(data.message || 'Steal failed');
+            }
+        });
+    });
+
+    const closeBtn = document.getElementById('stealCloseBtn');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+        document.querySelectorAll('.cell.stealable').forEach(cel => cel.classList.remove('stealable'));
+        modal.style.display = 'none';
+    });
 }
 
 // ======================= STATUS =======================

@@ -41,7 +41,9 @@ def find_cluster(row, col):
                 neighbor_owner = board[nr][nc]
                 neighbor_polarity = polarities[nr][nc]
                 # Only accept neighbor if it has a polarity and owner and is opposite polarity
-                if neighbor_owner in (1, 2, 3) and neighbor_polarity in ("+", "-") and current_polarity != neighbor_polarity:
+                # BUT restrict traversal so a player's cluster does not pull in opponent-owned pieces.
+                # Allow neighbors that are either the same owner as the start, or neutral (owner==3).
+                if neighbor_owner in (start_owner, 3) and neighbor_polarity in ("+", "-") and current_polarity != neighbor_polarity:
                     queue.append((nr, nc))
 
     return cluster
@@ -101,6 +103,8 @@ game_state = {
     "initial_neutral_clusters": [],
     # map index -> owner (None if not yet acquired)
     "neutral_cluster_owners": {},
+    # which player (1/2) is allowed to perform a steal (if they rolled a 6), else None
+    "steal_allowed_player": None,
     # winner: None or player number
     "winner": None
 }
@@ -220,6 +224,7 @@ def reset_board():
         "total_neutral_clusters": 0,
         "initial_neutral_clusters": [],
         "neutral_cluster_owners": {},
+        "steal_allowed_player": None,
         "winner": None
     }
 
@@ -237,6 +242,13 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
 
     rows = len(board)
     cols = len(board[0])
+
+    # Validate ownership: if an actor_player is provided, they may only move cells
+    # that are either their own or neutral. Prevent moving opponent pieces.
+    if actor_player in (1, 2):
+        for (r, c) in cluster_positions:
+            if board[r][c] not in (actor_player, 3):
+                return False, "Cannot move: cluster contains opponent pieces."
 
     # 1) Compute new positions and check bounds
     new_positions = []
@@ -271,12 +283,12 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
     board = new_board
     polarities = new_polarities
 
-    # If an actor_player is provided, convert only neutral pieces that are directly
-    # adjacent to the moved cells AND have opposite polarity to the adjacent moved cell.
-    # This enforces the "direct touch with opposite polarity" rule and prevents
-    # chained conversions through neutral-neutral links.
+    # If an actor_player is provided, and the cluster actually moved (dr/dc != 0), convert only
+    # neutral pieces that are directly adjacent to the moved cells AND have opposite polarity
+    # to the adjacent moved cell. This enforces the "direct touch with opposite polarity" rule
+    # and prevents chained conversions through neutral-neutral links or conversions on selection.
     converted_any = False
-    if actor_player in (1, 2):
+    if actor_player in (1, 2) and (dr != 0 or dc != 0):
         # compute new positions (they correspond by index)
         new_positions = [(r + dr, c + dc) for (r, c) in cluster_positions]
         seen_converted_cells = set()
@@ -349,6 +361,10 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
 
         # After conversions, check for winner
         check_winner()
+    else:
+        # If actor provided but no actual displacement, do not perform conversions.
+        # This avoids converting neutrals when a cluster is merely selected.
+        pass
 
     return True, "Cluster moved." + (" Converted neutrals." if converted_any else "")
 
@@ -523,3 +539,125 @@ def ai_place_all_neutrals(threshold=4):
         game_state["neutral_cluster_owners"] = {i: None for i in range(len(initial_clusters))}
         game_state["phase"] = "main"
         game_state["current_player"] = 1
+
+
+def get_stealable_neutrals_for_player(player):
+    """Return list of neutral cell coords that are eligible to be stolen by `player`.
+
+    A neutral cell is eligible if:
+    - its owner == 3
+    - it is adjacent (4-neighbor) to at least one cell owned by the opponent
+      where the neighbor polarity is opposite (i.e., magnetically connected)
+    The function returns a list of (r,c) tuples.
+    """
+    opponent = 2 if player == 1 else 1
+    res = []
+    # Prefer cells that were initially neutral (from initial_neutral_clusters)
+    initial_clusters = game_state.get('initial_neutral_clusters', [])
+    if initial_clusters:
+        for cl in initial_clusters:
+            for (r, c) in cl:
+                # currently must be owned by opponent to be stealable
+                if board[r][c] != opponent:
+                    continue
+                pol = polarities[r][c]
+                if pol not in ('+', '-'):
+                    continue
+                eligible = False
+                for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                        if board[nr][nc] == player:
+                            neigh_pol = polarities[nr][nc]
+                            if neigh_pol in ('+', '-') and neigh_pol != pol:
+                                eligible = True
+                                break
+                if eligible:
+                    res.append((r, c))
+        # If no polarity-based eligible cells found, allow adjacency-only steals
+        if not res:
+            adj_only = []
+            for cl in initial_clusters:
+                for (r, c) in cl:
+                    if board[r][c] != opponent:
+                        continue
+                    for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                            if board[nr][nc] == player:
+                                adj_only.append((r, c))
+                                break
+            return adj_only
+        return res
+
+    # Fallback: if we don't have initial clusters recorded, fall back to previous rule
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if board[r][c] != 3:
+                continue
+            pol = polarities[r][c]
+            if pol not in ('+', '-'):
+                continue
+            eligible = False
+            for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                    if board[nr][nc] == player:
+                        neigh_pol = polarities[nr][nc]
+                        if neigh_pol in ('+', '-') and neigh_pol != pol:
+                            eligible = True
+                            break
+            if eligible:
+                res.append((r, c))
+    return res
+
+
+def steal_neutral_cell(actor_player, target=None):
+    """Steal one neutral cell for actor_player.
+
+    If `target` is provided it should be (r,c) and will be validated. If not provided,
+    a random eligible neutral is chosen. Returns (True, message, converted_cells_list)
+    on success, or (False, message, []) on failure.
+    """
+    if actor_player not in (1, 2):
+        return False, "Invalid actor", []
+
+    eligible = get_stealable_neutrals_for_player(actor_player)
+    if not eligible:
+        return False, "No eligible neutral pieces to steal", []
+
+    chosen = None
+    if target:
+        tr, tc = target
+        if (tr, tc) not in eligible:
+            return False, "Requested target not eligible", []
+        chosen = (tr, tc)
+    else:
+        chosen = random.choice(eligible)
+
+    cr, cc = chosen
+    # perform conversion: neutral -> actor_player
+    board[cr][cc] = actor_player
+
+    # After changing the cell, re-evaluate whether any initial neutral cluster became fully
+    # owned by a player; update acquired_clusters accordingly
+    for idx, cluster in enumerate(game_state.get("initial_neutral_clusters", [])):
+        owners = set()
+        for (r0, c0) in cluster:
+            owners.add(board[r0][c0])
+        owners.discard(0)
+        owners.discard(3)
+        if len(owners) == 1:
+            owner = owners.pop()
+            if game_state.get('neutral_cluster_owners', {}).get(idx) != owner:
+                prev = game_state.get('neutral_cluster_owners', {}).get(idx)
+                if prev in (1,2):
+                    game_state['acquired_clusters'][prev] -= 1
+                game_state['neutral_cluster_owners'][idx] = owner
+                game_state['acquired_clusters'][owner] += 1
+                game_state['last_cluster_acquirer'] = owner
+
+    # After steal, check for winner
+    check_winner()
+
+    return True, "Stole neutral piece.", [chosen]

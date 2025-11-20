@@ -51,6 +51,27 @@ h1 {
     border-bottom: 1px dashed #eee;
 }
 
+/* Steal highlight */
+.cell.stealable {
+    outline: 3px dashed gold;
+    outline-offset: -3px;
+}
+
+.steal-list {
+    display: flex;
+    flex-direction: column;
+}
+.steal-list .target {
+    padding: 8px 10px;
+    margin: 6px 0;
+    border-radius: 6px;
+    background: #fff8dc;
+    cursor: pointer;
+    border: 1px solid #ffd27f;
+}
+.steal-list .target:hover { background: #fff2b8; }
+.steal-actions { margin-top: 10px; display:flex; gap:8px; }
+
 /* Dice animation */
 .dice-anim {
     width: 36px;

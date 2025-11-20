@@ -86,12 +86,23 @@ def roll_dice_route():
 
         value = roll_dice()
         # note: do NOT switch player here
+        # If a 6 is rolled, enable steal for the current player and provide targets
+        from board import get_state, get_stealable_neutrals_for_player
+        state = get_state()
+        steal_targets = None
+        if value == 6:
+            cp = state["current_player"]
+            # mark allowed stealer on server state
+            state["steal_allowed_player"] = cp
+            steal_targets = get_stealable_neutrals_for_player(cp)
+
         return jsonify({
             "success": True,
             "dice": value,
             "board": get_board(),
             "polarities": get_polarities(),
             "state": get_state_serializable(),
+            "steal_targets": [list(x) for x in (steal_targets or [])],
         })
     except Exception as e:
         import traceback
@@ -193,6 +204,62 @@ def end_turn_route():
                 {
                     "success": False,
                     "message": f"Server error during end_turn: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/steal", methods=["POST"])
+def steal_route():
+    try:
+        data = request.get_json() or {}
+        row = data.get("row")
+        col = data.get("col")
+
+        from board import (
+            get_state,
+            steal_neutral_cell,
+            get_board,
+            get_polarities,
+            get_state_serializable,
+        )
+
+        state = get_state()
+        actor = state["current_player"]
+
+        # ensure steal was allowed for this player
+        if state.get("steal_allowed_player") != actor:
+            return jsonify({"success": False, "message": "Steal not allowed right now."}), 400
+
+        target = None
+        if row is not None and col is not None:
+            target = (int(row), int(col))
+
+        success, message, converted = steal_neutral_cell(actor, target=target)
+        if success:
+            # clear steal permission after use
+            state["steal_allowed_player"] = None
+            return jsonify({
+                "success": True,
+                "message": message,
+                "converted": [list(x) for x in converted],
+                "board": get_board(),
+                "polarities": get_polarities(),
+                "state": get_state_serializable(),
+            })
+        else:
+            return jsonify({"success": False, "message": message}), 400
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during steal: {str(e)}",
                     "traceback": tb,
                 }
             ),
