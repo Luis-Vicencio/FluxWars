@@ -20,6 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const modal = document.getElementById("modal");
     const modalBody = document.getElementById("modalBody");
     const closeModal = document.getElementById("closeModal");
+    const bgLayer = document.querySelector('#gameContainer .bg-layer');
 
     // --- MAIN MENU BUTTONS ---
     document.getElementById("startGameBtn").addEventListener("click", () => {
@@ -60,6 +61,29 @@ document.addEventListener("DOMContentLoaded", () => {
     function showModal(content) {
         modalBody.innerHTML = content;
         modal.style.display = "block";
+    }
+
+    // Gentle mouse-based parallax for background layer
+    if (bgLayer && gameContainer) {
+        let width = gameContainer.clientWidth;
+        let height = gameContainer.clientHeight;
+        function onMouseMove(e) {
+            const rect = gameContainer.getBoundingClientRect();
+            const x = (e.clientX - rect.left) / width - 0.5; // -0.5..0.5
+            const y = (e.clientY - rect.top) / height - 0.5;
+            const maxTranslate = 16; // px
+            const tx = (-x) * maxTranslate;
+            const ty = (-y) * maxTranslate;
+            bgLayer.style.transform = `scale(1.03) translate(${tx}px, ${ty}px)`;
+        }
+        function onMouseLeave() {
+            bgLayer.style.transform = '';
+        }
+        gameContainer.addEventListener('mousemove', onMouseMove);
+        gameContainer.addEventListener('mouseleave', onMouseLeave);
+        window.addEventListener('resize', () => {
+            width = gameContainer.clientWidth; height = gameContainer.clientHeight;
+        });
     }
 
     // --- ROTATE BUTTON ---

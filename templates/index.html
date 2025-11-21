@@ -21,12 +21,14 @@
 
     <!-- GAME SCREEN (hidden until Start Game) -->
     <div id="gameContainer" style="display: none;">
+        <div class="bg-layer" aria-hidden="true"></div>
         <div id="turnBanner" class="turn-banner">Player {{ state.current_player }}'s Turn</div>
 
         <h2 id="status">(Phase: {{ state.phase.replace('_', ' ') }})</h2>
 
-        <div class="container">
-            <div class="board" id="board">
+        <div class="game-main">
+            <div class="container">
+                <div class="board" id="board">
                 {% for r in range(board|length) %}
                     <div class="row">
                         {% for c in range(board[r]|length) %}
@@ -41,9 +43,9 @@
                         {% endfor %}
                     </div>
                 {% endfor %}
+                </div>
             </div>
-        </div>
-        <div class="controls">
+            <div class="controls">
             <button id="rotateBtn">🔄 Rotate Piece (<span id="orientationLabel">0°</span>)</button>
             <div class="dice-wrap">
                 <button id="rollDiceBtn" style="display: none;" class="dice-btn">🎲 Roll Dice</button>
@@ -52,10 +54,10 @@
             </div>
             <button id="endTurnBtn" style="display:none;">⏭️ End Turn</button>
         </div>
-
-        <div id="sidePanel" class="side-panel">
+            <div id="sidePanel" class="side-panel">
             <h3>Move History</h3>
             <div id="moveHistory" class="move-history"></div>
+            </div>
         </div>
     </div>
 

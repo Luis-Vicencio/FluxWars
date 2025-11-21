@@ -1,10 +1,13 @@
 /* style.css */
 
+/* global box model and reset */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; padding: 20px; }
+
 body {
     font-family: Arial, sans-serif;
     background: #fafafa;
     text-align: center;
-    padding-top: 30px;
 }
 
 h1 {
@@ -15,6 +18,9 @@ h1 {
     display: inline-block;
     border: 2px solid #444;
     margin-bottom: 20px; /* adds space before the button */
+    padding: 8px; /* give breathing room around cells */
+    border-radius: 6px;
+    background: rgba(255,255,255,0.95);
 }
 
 /* Turn banner */
@@ -31,10 +37,9 @@ h1 {
 
 /* Side panel and move history */
 .side-panel {
-    position: absolute;
-    right: 24px;
-    top: 120px;
-    width: 220px;
+    /* moved into flow by being inside .game-main */
+    position: relative;
+    width: 240px;
     background: #fff;
     border: 1px solid #ddd;
     padding: 12px;
@@ -102,15 +107,19 @@ button[disabled], .button-disabled {
 
 .row {
     display: flex;
+    gap: 6px; /* consistent spacing between cells */
 }
 
 .cell {
-    width: 25px;
-    height: 25px;
+    width: 28px;
+    height: 28px;
     border: 1px solid #ccc;
     background: white;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background 0.18s, transform 0.12s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .cell:hover {
@@ -169,41 +178,22 @@ button:hover {
     pointer-events: none; /* players can't click the wall */
 }
 
-.cell {
-    position: relative;
-}
+.cell { position: relative; }
 
 #rotateBtn {
     transition: transform 0.3s ease;
 }
 
 .cell {
-    width: 25px;
-    height: 25px;
-    border: 1px solid #ccc;
-    background: white;
-    cursor: pointer;
-    transition: background 0.2s;
     font-weight: bold;
-    font-size: 14px;
-    line-height: 25px;
+    font-size: 12px;
+    line-height: 1;
     text-align: center;
 }
 
-.cell.player1 {
-    background: #0077cc;
-    color: white;
-}
-
-.cell.player2 {
-    background: #cc3300;
-    color: white;
-}
-
-.cell.neutral {
-    background: gray;
-    color: white;
-}
+.cell.player1 { background: #0077cc; color: white; }
+.cell.player2 { background: #cc3300; color: white; }
+.cell.neutral { background: gray; color: white; }
 
 .cell.ghost {
     opacity: 0.5;
@@ -220,7 +210,7 @@ button:hover {
 .polarity {
     position: absolute;
     font-weight: bold;
-    font-size: 16px;
+    font-size: 12px;
     font-family: monospace; /* Ensures consistent + and - width */
     color: white;
     width: 100%;
@@ -262,6 +252,96 @@ button:hover {
     align-items: center;
     justify-content: center;
     margin-top: 100px;
+}
+
+/* Main menu background using user's image */
+#mainMenu {
+    background-image: url('/static/images/FluxWarsCover.jpg');
+    background-size: cover;
+    background-position: center;
+    color: white;
+    position: relative;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+}
+
+#mainMenu::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(2px);
+    pointer-events: none;
+}
+
+#mainMenu > * {
+    position: relative;
+    z-index: 1;
+}
+
+.menu-screen button {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: white;
+}
+
+/* Game screen background layer */
+#gameContainer {
+    position: relative;
+    overflow: hidden;
+    padding: 18px 12px;
+}
+.bg-layer {
+    position: absolute;
+    inset: 0;
+    background-image: url('/static/images/FluxWarsCover.jpg');
+    background-size: cover;
+    background-position: center;
+    transform-origin: center;
+    z-index: 0;
+    will-change: transform;
+    /* gentle slow pan animation */
+    animation: bg-slow-pan 24s ease-in-out infinite alternate;
+}
+
+@keyframes bg-slow-pan {
+    0% { transform: scale(1) translate(0px, 0px); }
+    100% { transform: scale(1.04) translate(12px, 8px); }
+}
+
+/* ensure game content sits above the bg-layer */
+#gameContainer > *:not(.bg-layer) {
+    position: relative;
+    z-index: 1;
+}
+
+/* layout for board + controls + side panel */
+.game-main {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    justify-content: center;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.controls {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+}
+
+/* reduce visual clash on very small screens */
+@media (max-width: 600px) {
+    .bg-layer { filter: brightness(0.7) saturate(0.9); }
+    .game-main { flex-direction: column; gap: 12px; }
+    .side-panel { width: 100%; }
+    #sidePanel { position: relative; right: auto; top: auto; }
 }
 
 .menu-screen button {
