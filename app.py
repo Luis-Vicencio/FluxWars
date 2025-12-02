@@ -1,5 +1,3 @@
-# app.py
-
 from flask import Flask, render_template, request, jsonify
 from board import (
     get_board,
@@ -83,11 +81,9 @@ def roll_dice_route():
     # roll the dice; do NOT switch player here — player keeps the turn until moves exhausted
     try:
         from board import roll_dice, get_board, get_polarities, get_state, next_player
+        from board import get_state, get_stealable_neutrals_for_player
 
         value = roll_dice()
-        # note: do NOT switch player here
-        # If a 6 is rolled, enable steal for the current player and provide targets
-        from board import get_state, get_stealable_neutrals_for_player
         state = get_state()
         steal_targets = None
         if value == 6:
@@ -143,7 +139,7 @@ def move_cluster_route():
         state_before = get_state()
         actor = state_before["current_player"]
 
-        success, message = move_cluster_cells(cluster, dr, dc, actor_player=actor)
+        success, message, new_cluster = move_cluster_cells(cluster, dr, dc, actor_player=actor)
 
         state = get_state()
 
@@ -158,7 +154,8 @@ def move_cluster_route():
                 "message": message,
                 "board": get_board(),
                 "polarities": get_polarities(),
-                "state": get_state_serializable(),
+                    "state": get_state_serializable(),
+                    "new_cluster": [[int(r), int(c)] for (r, c) in new_cluster] if new_cluster else None,
             }
         )
     except Exception as e:
@@ -269,5 +266,3 @@ def steal_route():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-

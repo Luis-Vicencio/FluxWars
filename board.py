@@ -1,4 +1,6 @@
-# board.py
+# ==============================================================
+# FIXED board.py — Full working version with correct cluster logic
+# ==============================================================
 
 BOARD_SIZE = 15
 
@@ -13,12 +15,27 @@ def roll_dice():
     dice_value = random.randint(1, 6)
     return dice_value
 
+
+# ==============================================================
+#   PLAYER CLUSTER FINDER — polarity-alternating, no opponents
+# ==============================================================
+
 def find_cluster(row, col):
-    """Find all magnetically connected pieces starting from (row, col)."""
+    """
+    Return cluster that follows these rules:
+
+    - Only player-owned pieces spread the cluster.
+    - Neutral pieces may join ONLY if:
+        • they are directly touching a player piece
+        • they have opposite polarity
+    - Neutrals NEVER extend the cluster outward.
+    """
+
     start_owner = board[row][col]
-    start_polarity = polarities[row][col]
-    if start_owner == 0 or start_polarity not in ("+", "-"):
-        return []
+    start_pol = polarities[row][col]
+
+    if start_owner not in (1, 2):
+        return []  # cannot start on neutral or empty
 
     visited = set()
     queue = deque([(row, col)])
@@ -28,94 +45,215 @@ def find_cluster(row, col):
         r, c = queue.popleft()
         if (r, c) in visited:
             continue
+
         visited.add((r, c))
         cluster.append((r, c))
 
-        current_owner = board[r][c]
-        current_polarity = polarities[r][c]
+        cur_owner = board[r][c]
+        cur_pol = polarities[r][c]
 
-        # Check four directions
-        for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
-                neighbor_owner = board[nr][nc]
-                neighbor_polarity = polarities[nr][nc]
-                # Only accept neighbor if it has a polarity and owner and is opposite polarity
-                # BUT restrict traversal so a player's cluster does not pull in opponent-owned pieces.
-                # Allow neighbors that are either the same owner as the start, or neutral (owner==3).
-                if neighbor_owner in (start_owner, 3) and neighbor_polarity in ("+", "-") and current_polarity != neighbor_polarity:
+        # Explore neighbors
+        for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+            nr, nc = r+dr, c+dc
+            if not (0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE):
+                continue
+
+            neigh_owner = board[nr][nc]
+            neigh_pol = polarities[nr][nc]
+
+            # -----------------------------
+            # CASE 1: Player-owned neighbor
+            # -----------------------------
+            if neigh_owner == start_owner:
+                # must be opposite polarity to be connected
+                if neigh_pol in ("+","-") and neigh_pol != cur_pol:
                     queue.append((nr, nc))
+                continue
+
+            # -----------------------------
+            # CASE 2: Neutral neighbor
+            # -----------------------------
+            if neigh_owner == 3:
+                # neutral joins cluster ONLY if touching a player piece
+                # AND opposite polarity
+                if cur_owner == start_owner:
+                    if neigh_pol in ("+","-") and neigh_pol != cur_pol:
+                        # ADD NEUTRAL, but DO NOT EXPAND FROM IT
+                        if (nr, nc) not in visited:
+                            cluster.append((nr, nc))
+                continue
+
+            # Opponent pieces never connect
+            continue
 
     return cluster
 
 
+# ==============================================================
+#   NEUTRAL CLUSTER FINDER (adjacency only)
+# ==============================================================
+
+def get_cluster(row, col):
+    """
+    Determine a neutral cluster strictly by adjacency.
+    Used ONLY for initial neutral cluster grouping.
+        - Only owner == 3
+        - Only 4-way adjacency
+        - Polarity does NOT matter
+    """
+    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+        return []
+    if board[row][col] != 3:
+        return []
+
+    visited = set()
+    cluster = []
+    stack = [(row, col)]
+
+    while stack:
+        r, c = stack.pop()
+        if (r, c) in visited:
+            continue
+        visited.add((r, c))
+        cluster.append([r, c])
+
+        for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+            nr, nc = r+dr, c+dc
+            if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                if board[nr][nc] == 3:
+                    stack.append((nr, nc))
+
+    return cluster
+
+
+# ==============================================================
+#   MOVE VALIDATION
+# ==============================================================
+
 def can_move_cluster(cluster, dr, dc):
-    """Check if a cluster can move by (dr, dc) without collisions."""
-    # Normalize cluster to set of tuples
     cluster_set = {tuple(c) for c in cluster}
     for (r, c) in cluster:
-        nr, nc = r + dr, c + dc
+        nr, nc = r+dr, c+dc
         if not (0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE):
             return False
-        # If destination occupied and not part of the same cluster -> cannot move
         if board[nr][nc] != 0 and (nr, nc) not in cluster_set:
             return False
     return True
 
 
-def move_cluster(cluster, dr, dc):
-    """Move the entire cluster by (dr, dc) without validation (lower-level)."""
-    # This function assumes caller already validated.can be used internally.
-    temp_cells = [(r, c, board[r][c], polarities[r][c]) for (r, c) in cluster]
+# ==============================================================
+#   MOVE EXECUTION WITH CORRECT SINGLE-TILE CONVERSION
+# ==============================================================
 
-    # Clear old cells
-    for r, c, _, _ in temp_cells:
-        board[r][c] = 0
-        polarities[r][c] = ""
+def move_cluster_cells(cluster, dr, dc, actor_player=None):
+    """
+    Move cluster by (dr,dc).
+    Only converts ONE neutral tile per touched opposite-polarity adjacency.
+    No chain conversions. No multi-tile cluster flips.
+    Returns: (success, message, new_cluster_or_none)
+    """
+    global board, polarities
 
-    # Move and place
-    for r, c, owner, pol in temp_cells:
-        nr, nc = r + dr, c + dc
-        board[nr][nc] = owner
-        polarities[nr][nc] = pol
+    if game_state.get("phase") == "ended":
+        return False, "Game over — no moves allowed.", None
+
+    cluster_positions = [tuple(x) for x in cluster]
+    cluster_set = set(cluster_positions)
+
+    rows = len(board)
+    cols = len(board[0])
+
+    # prevent moving opponent pieces
+    if actor_player in (1, 2):
+        for (r,c) in cluster_positions:
+            if board[r][c] not in (actor_player, 3):
+                return False, "Cannot move opponent pieces.", None
+
+    # calculate target
+    new_positions = []
+    for (r,c) in cluster_positions:
+        nr, nc = r+dr, c+dc
+        if not (0 <= nr < rows and 0 <= nc < cols):
+            return False, "Out of bounds.", None
+        new_positions.append((nr, nc))
+
+    # collision check
+    for pos in new_positions:
+        if pos not in cluster_set:
+            nr, nc = pos
+            if board[nr][nc] != 0:
+                return False, "Blocked.", None
+
+    # copy board
+    new_board = [row[:] for row in board]
+    new_pol = [row[:] for row in polarities]
+
+    # clear old
+    for (r,c) in cluster_positions:
+        new_board[r][c] = 0
+        new_pol[r][c] = ""
+
+    # place new
+    for (r,c),(nr,nc) in zip(cluster_positions, new_positions):
+        new_board[nr][nc] = board[r][c]
+        new_pol[nr][nc] = polarities[r][c]
+
+    board = new_board
+    polarities = new_pol
+
+    # --------------------------
+    # SINGLE-TILE conversion rule
+    # --------------------------
+    converted_cells = []
+
+    if actor_player in (1,2) and (dr != 0 or dc != 0):
+
+        # Correct: derive moved positions from new board state
+        moved_positions = []
+        for (r, c) in cluster_positions:
+            nr, nc = r + dr, c + dc
+            if board[nr][nc] in (actor_player, 3):
+                moved_positions.append((nr, nc))
+
+        for (nr, nc) in moved_positions:
+            moved_pol = polarities[nr][nc]
+            if moved_pol not in ("+","-"):
+                continue
+
+            for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                ar, ac = nr+ddr, nc+ddc
+                if not (0 <= ar < rows and 0 <= ac < cols):
+                    continue
+
+                if board[ar][ac] != 3:   # must be neutral
+                    continue
+
+                neigh_pol = polarities[ar][ac]
+                if neigh_pol in ("+","-") and neigh_pol != moved_pol:
+                    board[ar][ac] = actor_player
+                    converted_cells.append((ar, ac))
+
+        # update stats
+        for (cr,cc) in converted_cells:
+            game_state["last_cluster_acquirer"] = actor_player
+            game_state["acquired_clusters"][actor_player] += 1
+
+        if converted_cells:
+            check_winner()
+
+    # Auto-cluster: find the new cluster starting from first moved piece
+    new_cluster = None
+    if actor_player in (1, 2) and new_positions:
+        # Use find_cluster on the first moved position to get the new cluster
+        first_pos = new_positions[0]
+        new_cluster = find_cluster(first_pos[0], first_pos[1])
+
+    return True, "Cluster moved." + (" Converted neutrals." if converted_cells else ""), new_cluster
 
 
-def get_dice():
-    return dice_value
-
-
-# 0 = empty, 1 = player1, 2 = player2, 3 = neutral
-board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-polarities = [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
-
-game_state = {
-    "current_player": 1,
-    "phase": "home_setup",  # home_setup -> neutral_setup -> main
-    "homes": {1: None, 2: None},
-    "neutral_counts": {1: 0, 2: 0},
-    # clusters acquired from neutrals by each player
-    "acquired_clusters": {1: 0, 2: 0},
-    # who acquired the last neutral cluster (1 or 2)
-    "last_cluster_acquirer": None,
-    # total neutral clusters initially placed on board
-    "total_neutral_clusters": 0,
-    # list of initial neutral clusters as frozensets of (r,c)
-    "initial_neutral_clusters": [],
-    # map index -> owner (None if not yet acquired)
-    "neutral_cluster_owners": {},
-    # which player (1/2) is allowed to perform a steal (if they rolled a 6), else None
-    "steal_allowed_player": None,
-    # winner: None or player number
-    "winner": None
-}
-
-# Each tuple ((dr, dc), polarity)
-PIECES = {
-    0: [((0, 0), '+'), ((0, 1), '-')],      # →  plus on left, minus on right
-    90: [((0, 0), '+'), ((1, 0), '-')],     # ↓  plus on top, minus below
-    180: [((0, 0), '+'), ((0, -1), '-')],   # ←  plus on right, minus on left
-    270: [((0, 0), '+'), ((-1, 0), '-')],   # ↑  plus on bottom, minus on top
-}
+# ==============================================================
+#   ACCESSORS
+# ==============================================================
 
 def get_board():
     return board
@@ -125,6 +263,40 @@ def get_polarities():
 
 def get_state():
     return game_state
+
+def get_dice():
+    return dice_value
+
+
+# ==============================================================
+#   STATE + PIECE PLACEMENT + PHASES
+# ==============================================================
+
+board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+polarities = [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+
+game_state = {
+    "current_player": 1,
+    "phase": "home_setup",
+    "homes": {1: None, 2: None},
+    "neutral_counts": {1: 0, 2: 0},
+    "acquired_clusters": {1: 0, 2: 0},
+    "last_cluster_acquirer": None,
+    "total_neutral_clusters": 0,
+    "initial_neutral_clusters": [],
+    "neutral_cluster_owners": {},
+    "steal_allowed_player": None,
+    "winner": None,
+    "main_turns": 0,
+    "max_main_turns": 4,
+}
+
+PIECES = {
+    0:   [((0, 0), '+'), ((0, 1), '-')],
+    90:  [((0, 0), '+'), ((1, 0), '-')],
+    180: [((0, 0), '+'), ((0, -1), '-')],
+    270: [((0, 0), '+'), ((-1, 0), '-')],
+}
 
 def can_place(piece, row, col):
     for dr, dc in [p[0] for p in piece]:
@@ -191,22 +363,24 @@ def toggle_piece(row, col, orientation):
     if phase == "home_setup":
         place_piece(piece, row, col, player)
         state["homes"][player] = (row, col, orientation)
-        # switch to the other player or next phase
+        # switch
         if player == 1:
             state["current_player"] = 2
         else:
-            # Enter neutral setup phase and trigger automatic neutral placement by AI
             state["phase"] = "neutral_setup"
             state["current_player"] = 1
-            # Automatically place neutral pieces for both players
             ai_place_all_neutrals()
         return True, "Placed home piece."
+
     elif phase == "neutral_setup":
-        # Neutral pieces are placed automatically by the server AI during neutral_setup.
         return False, "Neutral pieces are placed automatically by the server."
 
     return False, "Unknown error."
 
+
+# ==============================================================
+#   RESET BOARD
+# ==============================================================
 
 def reset_board():
     global board, polarities, game_state, dice_value, selected_cluster
@@ -225,236 +399,69 @@ def reset_board():
         "initial_neutral_clusters": [],
         "neutral_cluster_owners": {},
         "steal_allowed_player": None,
-        "winner": None
+        "winner": None,
+        "main_turns": 0,
+        "max_main_turns": 4,
     }
 
-def move_cluster_cells(cluster, dr, dc, actor_player=None):
-    """
-    Move all cells in cluster by (dr, dc) if valid.
-    - cluster: iterable of (r,c) pairs (tuples or lists)
-    - returns (True, "message") on success, (False, "message") on failure.
-    """
-    global board, polarities
 
-    # normalize cluster to list of tuples and preserve order (important)
-    cluster_positions = [tuple(x) for x in cluster]
-    cluster_set = set(cluster_positions)
-
-    rows = len(board)
-    cols = len(board[0])
-
-    # Validate ownership: if an actor_player is provided, they may only move cells
-    # that are either their own or neutral. Prevent moving opponent pieces.
-    if actor_player in (1, 2):
-        for (r, c) in cluster_positions:
-            if board[r][c] not in (actor_player, 3):
-                return False, "Cannot move: cluster contains opponent pieces."
-
-    # 1) Compute new positions and check bounds
-    new_positions = []
-    for (r, c) in cluster_positions:
-        nr, nc = r + dr, c + dc
-        if not (0 <= nr < rows and 0 <= nc < cols):
-            return False, "Out of bounds!"
-        new_positions.append((nr, nc))
-
-    # 2) Check collisions: if destination cell is occupied and not part of the cluster -> blocked
-    for pos in new_positions:
-        if pos not in cluster_set:
-            nr, nc = pos
-            if board[nr][nc] != 0:
-                return False, "Invalid move — space blocked!"
-
-    # 3) Create copies and apply move to avoid in-place overwrite issues
-    new_board = [row[:] for row in board]
-    new_polarities = [row[:] for row in polarities]
-
-    # Clear old positions on the copy
-    for (r, c) in cluster_positions:
-        new_board[r][c] = 0
-        new_polarities[r][c] = ""
-
-    # Place pieces at new positions (preserve owner/polarity from old board)
-    for (r, c), (nr, nc) in zip(cluster_positions, new_positions):
-        new_board[nr][nc] = board[r][c]
-        new_polarities[nr][nc] = polarities[r][c]
-
-    # 4) Commit
-    board = new_board
-    polarities = new_polarities
-
-    # If an actor_player is provided, and the cluster actually moved (dr/dc != 0), convert only
-    # neutral pieces that are directly adjacent to the moved cells AND have opposite polarity
-    # to the adjacent moved cell. This enforces the "direct touch with opposite polarity" rule
-    # and prevents chained conversions through neutral-neutral links or conversions on selection.
-    converted_any = False
-    if actor_player in (1, 2) and (dr != 0 or dc != 0):
-        # compute new positions (they correspond by index)
-        new_positions = [(r + dr, c + dc) for (r, c) in cluster_positions]
-        seen_converted_cells = set()
-        seen_converted_clusters = set()
-        initial_clusters = game_state.get("initial_neutral_clusters", [])
-        cluster_owner_map = game_state.get("neutral_cluster_owners", {})
-        for (nr, nc) in new_positions:
-            # polarity of the moved cell
-            moved_pol = polarities[nr][nc]
-            if moved_pol not in ('+', '-'):
-                continue
-            # check four neighbors for neutral pieces with opposite polarity
-            for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                ar, ac = nr + ddr, nc + ddc
-                if not (0 <= ar < BOARD_SIZE and 0 <= ac < BOARD_SIZE):
-                    continue
-                if board[ar][ac] == 3:
-                    neigh_pol = polarities[ar][ac]
-                    if neigh_pol in ('+', '-') and neigh_pol != moved_pol:
-                        # Find which initial cluster (if any) this neutral cell belongs to
-                        converted_cluster_idx = None
-                        for idx, cl in enumerate(initial_clusters):
-                            if (ar, ac) in cl:
-                                converted_cluster_idx = idx
-                                break
-                        if converted_cluster_idx is not None:
-                            if converted_cluster_idx in seen_converted_clusters:
-                                continue
-                            # Convert entire initial cluster to actor_player
-                            cl = initial_clusters[converted_cluster_idx]
-                            prev_owner = cluster_owner_map.get(converted_cluster_idx)
-                            # update board cells
-                            for (cr, cc) in cl:
-                                if board[cr][cc] == 3:
-                                    board[cr][cc] = actor_player
-                                    seen_converted_cells.add((cr, cc))
-                            # update owner counts
-                            if prev_owner != actor_player:
-                                if prev_owner in (1,2):
-                                    game_state["acquired_clusters"][prev_owner] -= 1
-                                game_state["neutral_cluster_owners"][converted_cluster_idx] = actor_player
-                                game_state["acquired_clusters"][actor_player] += 1
-                                game_state["last_cluster_acquirer"] = actor_player
-                            seen_converted_clusters.add(converted_cluster_idx)
-                            converted_any = True
-                        else:
-                            # fallback: convert single neutral cell if initial clusters unknown
-                            if (ar, ac) not in seen_converted_cells:
-                                board[ar][ac] = actor_player
-                                seen_converted_cells.add((ar, ac))
-                                converted_any = True
-
-        # After converting individual neutral pieces, check whether any initial neutral
-        # clusters are now fully owned by one player — if so, mark them acquired.
-        for idx, cluster in enumerate(game_state.get("initial_neutral_clusters", [])):
-            if game_state.get("neutral_cluster_owners", {}).get(idx) is not None:
-                continue
-            # if all cells of this initial cluster are now owned by a single non-neutral player
-            owners = set()
-            for (cr, cc) in cluster:
-                owners.add(board[cr][cc])
-            # if owners is exactly {1} or {2}, cluster acquired
-            owners.discard(0)
-            owners.discard(3)
-            if len(owners) == 1:
-                owner = owners.pop()
-                game_state["neutral_cluster_owners"][idx] = owner
-                game_state["acquired_clusters"][owner] += 1
-                game_state["last_cluster_acquirer"] = owner
-
-        # After conversions, check for winner
-        check_winner()
-    else:
-        # If actor provided but no actual displacement, do not perform conversions.
-        # This avoids converting neutrals when a cluster is merely selected.
-        pass
-
-    return True, "Cluster moved." + (" Converted neutrals." if converted_any else "")
+# ==============================================================
+#   TURN PROGRESSION
+# ==============================================================
 
 def next_player():
-    """Switch to the next player."""
-    global game_state
+    if game_state.get("phase") == "ended":
+        return game_state["current_player"]
+
+    if game_state.get("phase") == "main":
+        game_state["main_turns"] += 1
+
+        if game_state["main_turns"] >= game_state.get("max_main_turns", 4):
+            check_winner()
+
+            if game_state.get("winner") is None:
+                a1 = game_state["acquired_clusters"][1]
+                a2 = game_state["acquired_clusters"][2]
+                if a1 > a2:
+                    game_state["winner"] = 1
+                elif a2 > a1:
+                    game_state["winner"] = 2
+                else:
+                    last = game_state.get("last_cluster_acquirer")
+                    if last in (1,2):
+                        game_state["winner"] = last
+                    else:
+                        # explicit draw when counts equal and no last acquirer
+                        game_state["winner"] = "draw"
+
+            game_state["phase"] = "ended"
+            return game_state["current_player"]
+
     game_state["current_player"] = 2 if game_state["current_player"] == 1 else 1
     return game_state["current_player"]
 
-def get_cluster(row, col):
-    """Return connected cluster for given cell (same player). Returns list of [r,c]."""
-    if not (0 <= row < len(board) and 0 <= col < len(board[0])):
-        return []
-    player = board[row][col]
-    if player == 0:
-        return []
 
-    visited = set()
-    cluster = []
-    stack = [(row, col)]
-
-    while stack:
-        r, c = stack.pop()
-        if (r, c) in visited:
-            continue
-        visited.add((r, c))
-        cluster.append([r, c])
-        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < len(board) and 0 <= nc < len(board[0]) and board[nr][nc] == player:
-                stack.append((nr, nc))
-    return cluster
-
-
-def check_winner():
-    """Evaluate win conditions and set game_state['winner'] if a winner is found.
-
-    Rules implemented:
-    - If a player has a strict majority of the initially placed neutral clusters -> they win.
-    - If all neutral clusters have been acquired and both players have the same number,
-      the player who acquired the last cluster (game_state['last_cluster_acquirer']) wins.
-    """
-    total = game_state.get("total_neutral_clusters", 0)
-    if total == 0:
-        return None
-
-    a1 = game_state["acquired_clusters"][1]
-    a2 = game_state["acquired_clusters"][2]
-
-    # strict majority
-    if a1 > total // 2:
-        game_state["winner"] = 1
-        game_state["phase"] = "ended"
-        return 1
-    if a2 > total // 2:
-        game_state["winner"] = 2
-        game_state["phase"] = "ended"
-        return 2
-
-    # all acquired, but tie — last acquirer wins
-    if a1 + a2 >= total:
-        if a1 == a2 and game_state.get("last_cluster_acquirer") in (1, 2):
-            game_state["winner"] = game_state["last_cluster_acquirer"]
-            game_state["phase"] = "ended"
-            return game_state["winner"]
-
-    return None
-
+# ==============================================================
+#   SERIALIZATION FOR CLIENT
+# ==============================================================
 
 def get_state_serializable():
-    """Return a JSON-serializable copy of game_state.
-
-    Converts frozensets (initial_neutral_clusters) into lists of [r,c] lists.
-    """
     import copy
     s = copy.deepcopy(game_state)
     inc = s.get("initial_neutral_clusters")
     if inc:
         serial = []
         for cluster in inc:
-            # cluster may be a frozenset of (r,c) tuples
             serial.append([list(x) for x in cluster])
         s["initial_neutral_clusters"] = serial
     return s
 
 
+# ==============================================================
+#   AI NEUTRAL PLACEMENT
+# ==============================================================
+
 def ai_place_neutral_for_player(player, max_attempts=2000, min_distance=4):
-    """Attempt to place one neutral piece on the opponent's half for `player`.
-    Enforces a minimum Manhattan distance (`min_distance`) from existing neutral
-    pieces to keep neutrals spaced out. Returns True if placed, False otherwise."""
     cols = range(8, BOARD_SIZE) if player == 1 else range(0, 7)
     attempts = 0
     while attempts < max_attempts:
@@ -464,7 +471,6 @@ def ai_place_neutral_for_player(player, max_attempts=2000, min_distance=4):
         col = random.choice(list(cols))
         row = random.randrange(0, BOARD_SIZE)
 
-        # Reject any placement touching the forbidden middle column
         touches_middle = any((col + dc) == 7 for (dr, dc), _ in piece)
         if touches_middle:
             continue
@@ -473,26 +479,23 @@ def ai_place_neutral_for_player(player, max_attempts=2000, min_distance=4):
         if not ok:
             continue
 
-        # Ensure spacing: every cell of the new piece must be at least min_distance
-        # away (Manhattan) from any existing neutral cell
-        def too_close_to_neutral(r0, c0):
+        def too_close(r0, c0):
             for r in range(BOARD_SIZE):
                 for c in range(BOARD_SIZE):
                     if board[r][c] == 3:
-                        if abs(r - r0) + abs(c - c0) < min_distance:
+                        if abs(r-r0) + abs(c-c0) < min_distance:
                             return True
             return False
 
         conflict = False
         for (dr, dc), _ in piece:
-            rcell, ccell = row + dr, col + dc
-            if too_close_to_neutral(rcell, ccell):
+            rr, cc = row+dr, col+dc
+            if too_close(rr, cc):
                 conflict = True
                 break
         if conflict:
             continue
 
-        # Place neutral piece (owner = 3)
         place_piece(piece, row, col, 3)
         game_state["neutral_counts"][player] += 1
         return True
@@ -501,163 +504,188 @@ def ai_place_neutral_for_player(player, max_attempts=2000, min_distance=4):
 
 
 def ai_place_all_neutrals(threshold=4):
-    """Automatically place neutral pieces alternately for players until each reaches threshold.
-    This function mutates the board and game_state. If placement fails after many attempts,
-    it will stop to avoid infinite loops."""
-    # Alternate placements starting with player 1
-    players = [1, 2]
-    total_attempts = 0
-    max_total_attempts = 20000
-    while (game_state["neutral_counts"][1] < threshold or game_state["neutral_counts"][2] < threshold) and total_attempts < max_total_attempts:
+    players = [1,2]
+    attempts = 0
+    max_attempts = 20000
+
+    while (game_state["neutral_counts"][1] < threshold or 
+           game_state["neutral_counts"][2] < threshold) and attempts < max_attempts:
+
         for p in players:
             if game_state["neutral_counts"][p] >= threshold:
                 continue
             placed = ai_place_neutral_for_player(p)
-            total_attempts += 1
-            if not placed:
-                # If unable to place for this player after many tries, continue trying overall
-                continue
-    # If both thresholds satisfied, compute total neutral clusters, move to main phase
-    # and set current player to 1
-    if game_state["neutral_counts"][1] >= threshold and game_state["neutral_counts"][2] >= threshold:
-        # compute total neutral clusters on the board (contiguous same-owner clusters)
+            attempts += 1
+
+    # Compute neutral clusters
+    if (game_state["neutral_counts"][1] >= threshold and 
+        game_state["neutral_counts"][2] >= threshold):
+
         visited = set()
         total = 0
         initial_clusters = []
+
         for r in range(BOARD_SIZE):
             for c in range(BOARD_SIZE):
                 if board[r][c] == 3 and (r, c) not in visited:
                     cluster = get_cluster(r, c)
                     coords = [tuple(x) for x in cluster]
-                    for (cr, cc) in coords:
-                        visited.add((cr, cc))
+                    for (rr,cc) in coords:
+                        visited.add((rr,cc))
                     total += 1
                     initial_clusters.append(frozenset(coords))
+
         game_state["total_neutral_clusters"] = total
-        # store initial clusters and initialize owners map
         game_state["initial_neutral_clusters"] = initial_clusters
         game_state["neutral_cluster_owners"] = {i: None for i in range(len(initial_clusters))}
         game_state["phase"] = "main"
         game_state["current_player"] = 1
+        game_state["main_turns"] = 0
 
+
+# ==============================================================
+#   STEAL MECHANICS
+# ==============================================================
 
 def get_stealable_neutrals_for_player(player):
-    """Return list of neutral cell coords that are eligible to be stolen by `player`.
-
-    A neutral cell is eligible if:
-    - its owner == 3
-    - it is adjacent (4-neighbor) to at least one cell owned by the opponent
-      where the neighbor polarity is opposite (i.e., magnetically connected)
-    The function returns a list of (r,c) tuples.
-    """
     opponent = 2 if player == 1 else 1
     res = []
-    # Prefer cells that were initially neutral (from initial_neutral_clusters)
+
     initial_clusters = game_state.get('initial_neutral_clusters', [])
     if initial_clusters:
         for cl in initial_clusters:
-            for (r, c) in cl:
-                # currently must be owned by opponent to be stealable
+            for (r,c) in cl:
                 if board[r][c] != opponent:
                     continue
                 pol = polarities[r][c]
-                if pol not in ('+', '-'):
+                if pol not in ('+','-'):
                     continue
+
                 eligible = False
                 for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                    nr, nc = r + dr, c + dc
+                    nr, nc = r+dr, c+dc
                     if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
                         if board[nr][nc] == player:
-                            neigh_pol = polarities[nr][nc]
-                            if neigh_pol in ('+', '-') and neigh_pol != pol:
+                            neigh = polarities[nr][nc]
+                            if neigh in ('+','-') and neigh != pol:
                                 eligible = True
                                 break
                 if eligible:
-                    res.append((r, c))
-        # If no polarity-based eligible cells found, allow adjacency-only steals
+                    res.append((r,c))
+
         if not res:
             adj_only = []
             for cl in initial_clusters:
-                for (r, c) in cl:
+                for (r,c) in cl:
                     if board[r][c] != opponent:
                         continue
                     for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                        nr, nc = r + dr, c + dc
+                        nr, nc = r+dr, c+dc
                         if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
                             if board[nr][nc] == player:
-                                adj_only.append((r, c))
+                                adj_only.append((r,c))
                                 break
             return adj_only
+
         return res
 
-    # Fallback: if we don't have initial clusters recorded, fall back to previous rule
+    # fallback
     for r in range(BOARD_SIZE):
         for c in range(BOARD_SIZE):
             if board[r][c] != 3:
                 continue
             pol = polarities[r][c]
-            if pol not in ('+', '-'):
+            if pol not in ('+','-'):
                 continue
+
             eligible = False
             for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                nr, nc = r + dr, c + dc
+                nr, nc = r+dr, c+dc
                 if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
                     if board[nr][nc] == player:
-                        neigh_pol = polarities[nr][nc]
-                        if neigh_pol in ('+', '-') and neigh_pol != pol:
+                        neigh = polarities[nr][nc]
+                        if neigh in ('+','-') and neigh != pol:
                             eligible = True
                             break
             if eligible:
-                res.append((r, c))
+                res.append((r,c))
+
     return res
 
 
 def steal_neutral_cell(actor_player, target=None):
-    """Steal one neutral cell for actor_player.
+    if actor_player not in (1,2):
+        return False, "Invalid player", []
 
-    If `target` is provided it should be (r,c) and will be validated. If not provided,
-    a random eligible neutral is chosen. Returns (True, message, converted_cells_list)
-    on success, or (False, message, []) on failure.
-    """
-    if actor_player not in (1, 2):
-        return False, "Invalid actor", []
+    if game_state.get("phase") == "ended":
+        return False, "Game over — cannot steal.", []
 
     eligible = get_stealable_neutrals_for_player(actor_player)
     if not eligible:
         return False, "No eligible neutral pieces to steal", []
 
-    chosen = None
     if target:
-        tr, tc = target
-        if (tr, tc) not in eligible:
+        if target not in eligible:
             return False, "Requested target not eligible", []
-        chosen = (tr, tc)
+        chosen = target
     else:
         chosen = random.choice(eligible)
 
     cr, cc = chosen
-    # perform conversion: neutral -> actor_player
+
     board[cr][cc] = actor_player
 
-    # After changing the cell, re-evaluate whether any initial neutral cluster became fully
-    # owned by a player; update acquired_clusters accordingly
-    for idx, cluster in enumerate(game_state.get("initial_neutral_clusters", [])):
-        owners = set()
-        for (r0, c0) in cluster:
-            owners.add(board[r0][c0])
+    # Update cluster ownership
+    for idx, cl in enumerate(game_state.get("initial_neutral_clusters", [])):
+        owners = set(board[r][c] for (r,c) in cl)
         owners.discard(0)
         owners.discard(3)
+
         if len(owners) == 1:
             owner = owners.pop()
-            if game_state.get('neutral_cluster_owners', {}).get(idx) != owner:
-                prev = game_state.get('neutral_cluster_owners', {}).get(idx)
+            prev = game_state["neutral_cluster_owners"].get(idx)
+            if prev != owner:
                 if prev in (1,2):
-                    game_state['acquired_clusters'][prev] -= 1
-                game_state['neutral_cluster_owners'][idx] = owner
-                game_state['acquired_clusters'][owner] += 1
-                game_state['last_cluster_acquirer'] = owner
+                    game_state["acquired_clusters"][prev] -= 1
 
-    # After steal, check for winner
+                game_state["neutral_cluster_owners"][idx] = owner
+                game_state["acquired_clusters"][owner] += 1
+                game_state["last_cluster_acquirer"] = owner
+
     check_winner()
 
     return True, "Stole neutral piece.", [chosen]
+
+
+# ==============================================================
+#   WINNING LOGIC
+# ==============================================================
+
+def check_winner():
+    total = game_state.get("total_neutral_clusters", 0)
+    if total == 0:
+        return None
+
+    a1 = game_state["acquired_clusters"][1]
+    a2 = game_state["acquired_clusters"][2]
+
+    if a1 > total // 2:
+        game_state["winner"] = 1
+        game_state["phase"] = "ended"
+        return 1
+    if a2 > total // 2:
+        game_state["winner"] = 2
+        game_state["phase"] = "ended"
+        return 2
+
+    if a1 + a2 >= total:
+        if a1 == a2:
+            last = game_state.get("last_cluster_acquirer")
+            if last in (1,2):
+                game_state["winner"] = last
+            else:
+                game_state["winner"] = "draw"
+            game_state["phase"] = "ended"
+            return game_state["winner"]
+
+    return None

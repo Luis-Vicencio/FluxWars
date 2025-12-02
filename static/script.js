@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const modal = document.getElementById("modal");
     const modalBody = document.getElementById("modalBody");
     const closeModal = document.getElementById("closeModal");
-    const bgLayer = document.querySelector('#gameContainer .bg-layer');
+    const bgLayer = document.querySelector('#gameContainer .bg-layer'); // harmless if null
 
     // --- MAIN MENU BUTTONS ---
     document.getElementById("startGameBtn").addEventListener("click", () => {
@@ -37,9 +37,10 @@ document.addEventListener("DOMContentLoaded", () => {
             <h3>Help</h3>
             <ul>
                 <li>Place your home piece on your side (left or right).</li>
-                <li>Then place neutral pieces on your opponent's half.</li>
+                <li>Neutral pieces are automatically placed for each player.</li>
                 <li>In the main phase, roll the dice to move your magnetic clusters.</li>
-                <li>Opposite polarities (+/–) attract, same repel.</li>
+                <li>Opposite polarities (+/–) attract, same polarities repel.</li>
+                <li>The game ends after 4 total main-phase turns.</li>
             </ul>
         `);
     });
@@ -63,7 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
         modal.style.display = "block";
     }
 
-    // Gentle mouse-based parallax for background layer
+    // Gentle mouse-based parallax for background layer (if present)
     if (bgLayer && gameContainer) {
         let width = gameContainer.clientWidth;
         let height = gameContainer.clientHeight;
@@ -170,7 +171,6 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (data.steal_targets && data.steal_targets.length === 0 && data.dice === 6) {
                 // rolled a 6 but no targets
                 addHistoryEntry('Rolled 6 but no stealable neutrals available');
-                // optionally notify player
                 showModal('<h3>No steal targets</h3><p>There are no eligible neutral pieces adjacent to opponent clusters to steal.</p>');
             }
         } else {
@@ -199,7 +199,8 @@ document.addEventListener("DOMContentLoaded", () => {
             addHistoryEntry(`Moved cluster by (${dr},${dc})`);
             updateBoard(data.board, data.polarities, data.state?.phase || "main");
             if (data.state) updateStatus(data.state);
-            selectedCluster = data.new_cluster || selectedCluster.map(([r, c]) => [r + dr, c + dc]);
+            // Auto-select the new cluster returned by server for next move
+            selectedCluster = data.new_cluster || [];
             highlightCluster(selectedCluster);
             diceValue -= 1;
             diceResult.textContent = `🎲 Moves left: ${diceValue}`;
@@ -356,6 +357,32 @@ function updateStatus(state) {
     const turnBanner = document.getElementById('turnBanner');
     currentPhase = state.phase;
 
+    // Game ended: freeze UI and show final result
+    if (state.phase === "ended") {
+        if (state.winner === 1 || state.winner === 2) {
+            status.textContent = `Game Over — Player ${state.winner} Wins!`;
+            if (turnBanner) {
+                turnBanner.textContent = `Winner: Player ${state.winner}`;
+                turnBanner.style.background = state.winner === 1
+                    ? 'linear-gradient(90deg, #2b6cb0, #2b6cb0)'
+                    : 'linear-gradient(90deg, #e53e3e, #e53e3e)';
+            }
+            showWinnerAnimation(state.winner);
+        } else if (state.winner === "draw" || state.winner === "tie" || state.winner == null) {
+            status.textContent = `Game Over — It's a Tie!`;
+            if (turnBanner) {
+                turnBanner.textContent = `Tie Game`;
+                turnBanner.style.background = 'linear-gradient(90deg, #4a5568, #2d3748)';
+            }
+            showWinnerAnimation("tie");
+        } else {
+            // unknown winner value: fallback to generic game over
+            status.textContent = `Game Over`;
+            showWinnerAnimation("tie");
+        }
+        return;
+    }
+
     // update turn banner color and text
     if (turnBanner) {
         turnBanner.textContent = `Player ${state.current_player}'s Turn`;
@@ -368,25 +395,29 @@ function updateStatus(state) {
 
     if (state.phase === "home_setup") {
         status.textContent = `Player ${state.current_player}'s Turn (Home Setup) — Place your HOME piece on your own side.`;
-        rollDiceBtn.style.display = "none";
+        if (rollDiceBtn) rollDiceBtn.style.display = "none";
+        if (endTurnBtn) endTurnBtn.style.display = 'none';
     } 
     else if (state.phase === "neutral_setup") {
-        status.textContent = `Player ${state.current_player}'s Turn (Neutral Setup) — Place NEUTRAL pieces on your opponent's half.`;
-        rollDiceBtn.style.display = "none";
+        status.textContent = `Neutral Setup — Neutral pieces are being placed automatically.`;
+        if (rollDiceBtn) rollDiceBtn.style.display = "none";
+        if (endTurnBtn) endTurnBtn.style.display = 'none';
     } 
     else if (state.phase === "main") {
-        status.textContent = `Player ${state.current_player}'s Turn (Main Phase) — Roll dice, Click on piece, and move with arrow keys.`;
-        rollDiceBtn.style.display = "inline-block";
-        endTurnBtn.style.display = 'inline-block';
+        const t = state.main_turns || 0;
+        const max = state.max_main_turns || 4;
+        status.textContent = `Player ${state.current_player}'s Turn (Main Phase) — Turn ${t + 1} of ${max}. Roll dice, click a piece, then move with arrow keys.`;
+        if (rollDiceBtn) rollDiceBtn.style.display = "inline-block";
+        if (endTurnBtn) endTurnBtn.style.display = 'inline-block';
     } 
     else {
         status.textContent = `Player ${state.current_player}'s Turn (Phase: ${state.phase})`;
-        rollDiceBtn.style.display = "none";
+        if (rollDiceBtn) rollDiceBtn.style.display = "none";
         if (endTurnBtn) endTurnBtn.style.display = 'none';
     }
 
-    // If winner declared, trigger animation
-    if (state.winner) {
+    // If winner declared early (by majority, etc.) while still not marked "ended"
+    if (state.winner && state.phase !== "ended") {
         showWinnerAnimation(state.winner);
     }
 }
@@ -426,8 +457,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Simple winner animation overlay
 function showWinnerAnimation(player) {
-    if (document.getElementById('winnerOverlay')) return; // already showing
-    const colors = {1: '#2b6cb0', 2: '#e53e3e'}; // blue, red
+    if (document.getElementById('winnerOverlay')) return; // already active
+
+    const colors = {
+        1: '#2b6cb0', // blue
+        2: '#e53e3e', // red
+        tie: '#444444' // neutral grey for tie
+    };
+
+    const text = 
+        player === 1 ? "Player 1 Wins!" :
+        player === 2 ? "Player 2 Wins!" :
+        "Tie Game!";
+
     const overlay = document.createElement('div');
     overlay.id = 'winnerOverlay';
     overlay.style.position = 'fixed';
@@ -439,7 +481,7 @@ function showWinnerAnimation(player) {
     overlay.style.alignItems = 'center';
     overlay.style.justifyContent = 'center';
     overlay.style.zIndex = '9999';
-    overlay.style.background = 'rgba(0,0,0,0.4)';
+    overlay.style.background = 'rgba(0,0,0,0.45)';
 
     const box = document.createElement('div');
     box.style.padding = '30px 40px';
@@ -448,8 +490,8 @@ function showWinnerAnimation(player) {
     box.style.fontSize = '2rem';
     box.style.fontWeight = '700';
     box.style.textAlign = 'center';
-    box.style.background = colors[player] || '#000';
-    box.textContent = `Player ${player} wins!`;
+    box.style.background = colors[player] || colors.tie;
+    box.textContent = text;
 
     const br = document.createElement('div');
     br.style.height = '16px';
@@ -464,39 +506,20 @@ function showWinnerAnimation(player) {
     resetBtn.style.borderRadius = '8px';
     resetBtn.style.cursor = 'pointer';
     resetBtn.onclick = async () => {
-        // call server reset endpoint
         const res = await fetch('/reset', { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-            // remove overlay and update board/status
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (overlay.parentNode) overlay.remove();
             updateBoard(data.board, data.polarities, data.state.phase);
             updateStatus(data.state);
-        } else {
-            alert('Reset failed');
         }
     };
     box.appendChild(resetBtn);
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
-
-    // simple pulse effect
-    let scale = 1;
-    let dir = 1;
-    const iv = setInterval(() => {
-        scale += dir * 0.02;
-        if (scale > 1.06) dir = -1;
-        if (scale < 0.96) dir = 1;
-        box.style.transform = `scale(${scale})`;
-    }, 30);
-
-    // remove after 7 seconds
-    setTimeout(() => {
-        clearInterval(iv);
-        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-    }, 7000);
 }
+
 
 // ======================= GHOST PREVIEW =======================
 
