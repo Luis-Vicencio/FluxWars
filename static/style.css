@@ -1,386 +1,253 @@
+.dice-result-outside {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fbbf24, #f59e0b);
+    color: white;
+    box-shadow: 0 8px 20px rgba(245,158,11,0.18);
+    display: inline-block;
+}
+.dice-result-outside #diceResult { margin: 0; font-size: 1rem; font-weight: 800; }
 /* style.css */
 
 /* global box model and reset */
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; padding: 20px; }
 
 body {
-    font-family: Arial, sans-serif;
-    background: #fafafa;
+    margin: 0;
+    padding: 18px;
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+    color: #e6f3ff;
     text-align: center;
+    background-image: linear-gradient(rgba(7, 18, 36, 0.06), rgba(7, 18, 36, 0.02)), url('/static/images/FluxWarsCover.jpg');
+    background-size: cover;
+    background-position: center top;
+    background-attachment: fixed;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-h1 {
-    margin-bottom: 20px;
-}
+h1 { margin-bottom: 20px; }
 
 .board {
     display: inline-block;
-    border: 2px solid #444;
-    margin-bottom: 20px; /* adds space before the button */
-    padding: 8px; /* give breathing room around cells */
-    border-radius: 6px;
-    background: rgba(255,255,255,0.95);
+    border: 1px solid rgba(15,23,42,0.08);
+    margin-bottom: 16px;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.85);
+    box-shadow: 0 6px 18px rgba(2,6,23,0.06);
 }
 
 /* Turn banner */
 .turn-banner {
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 700;
-    padding: 10px 16px;
-    border-radius: 8px;
+    padding: 8px 14px;
+    border-radius: 10px;
     display: inline-block;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
     color: white;
-    background: linear-gradient(90deg, #2b6cb0, #2b6cb0);
+    background: linear-gradient(90deg,#2563eb,#2563eb);
+    box-shadow: 0 4px 12px rgba(37,99,235,0.18);
 }
 
 /* Side panel and move history */
 .side-panel {
-    /* moved into flow by being inside .game-main */
     position: relative;
-    width: 240px;
-    background: #fff;
-    border: 1px solid #ddd;
-    padding: 12px;
-    border-radius: 8px;
+    width: 325px;
+    background: #ffffff;
+    border: 1px solid rgba(15,23,42,0.06);
+    padding: 14px;
+    border-radius: 10px;
     text-align: left;
+    color: #000000;
 }
-.move-history {
-    max-height: 360px;
-    overflow-y: auto;
-    font-size: 0.95rem;
+.move-history { max-height: 360px; overflow-y: auto; font-size: 0.95rem; color: #000000; }
+.move-history .entry { padding: 6px 8px; border-bottom: 1px dashed #f1f5f9; color: #000000; }
+
+/* Dice result card below move history */
+.dice-result-card {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fbbf24, #f59e0b);
+    color: white;
+    box-shadow: 0 8px 20px rgba(245,158,11,0.18);
+    display: block;
 }
-.move-history .entry {
-    padding: 6px 8px;
-    border-bottom: 1px dashed #eee;
+.dice-result-card #diceResult {
+    margin: 0;
+    font-size: 0.98rem;
+    font-weight: 800;
 }
 
 /* Steal highlight */
-.cell.stealable {
-    outline: 3px dashed gold;
-    outline-offset: -3px;
-}
-
-.steal-list {
-    display: flex;
-    flex-direction: column;
-}
-.steal-list .target {
-    padding: 8px 10px;
-    margin: 6px 0;
-    border-radius: 6px;
-    background: #fff8dc;
-    cursor: pointer;
-    border: 1px solid #ffd27f;
-}
+.cell.stealable { outline: 3px dashed gold; outline-offset: -3px; }
+.steal-list { display: flex; flex-direction: column; }
+.steal-list .target { padding: 8px 10px; margin: 6px 0; border-radius: 6px; background: #fff8dc; cursor: pointer; border: 1px solid #ffd27f; }
 .steal-list .target:hover { background: #fff2b8; }
 .steal-actions { margin-top: 10px; display:flex; gap:8px; }
 
 /* Dice animation */
-.dice-anim {
-    width: 36px;
-    height: 36px;
-    display: inline-block;
-    margin-left: 8px;
-}
-.dice-rolling {
-    animation: diceSpin 0.8s linear infinite;
-}
-@keyframes diceSpin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
+.dice-anim { width: 36px; height: 36px; display: none; margin-left: 8px; }
+.dice-rolling { animation: diceSpin 0.8s linear infinite; }
+@keyframes diceSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 /* Converted cell highlight */
-.cell.converted {
-    box-shadow: 0 0 10px 3px rgba(255, 215, 0, 0.9) inset;
-    transform: scale(1.1);
-    transition: transform 0.25s ease, box-shadow 0.4s ease;
-}
+.cell.converted { box-shadow: 0 0 10px 3px rgba(250,204,21,0.95) inset; transform: scale(1.06); transition: transform 0.22s ease, box-shadow 0.36s ease; }
 
 /* Disabled button style */
-button[disabled], .button-disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
+button[disabled], .button-disabled { opacity: 0.6; cursor: not-allowed; }
 
-.row {
-    display: flex;
-    gap: 6px; /* consistent spacing between cells */
-}
+.row { display: flex; gap: 8px; }
 
 .cell {
-    width: 28px;
-    height: 28px;
-    border: 1px solid #ccc;
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    border: 1px solid rgba(2,6,23,0.06);
     background: white;
     cursor: pointer;
-    transition: background 0.18s, transform 0.12s;
+    transition: background 0.14s ease, transform 0.12s ease, box-shadow 0.12s;
     display: inline-flex;
     align-items: center;
     justify-content: center;
 }
+.cell:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(2,6,23,0.06); }
+.cell.filled { background: #2563eb; }
 
-.cell:hover {
-    background: #e0f0ff;
-}
-
-.cell.filled {
-    background: #0077cc;
-}
-
+/* Base button look (pill) */
 button {
-    padding: 10px 18px;
+    padding: 12px 18px;
     border: none;
-    background-color: #0077cc;
+    background: linear-gradient(180deg,#06b6d4,#0891b2);
     color: white;
     font-size: 14px;
-    border-radius: 6px;
+    border-radius: 12px;
     cursor: pointer;
+    box-shadow: 0 8px 20px rgba(6,182,212,0.12);
+    transition: transform 0.12s ease, box-shadow 0.18s ease, opacity 0.12s;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
+button:hover { transform: translateY(-3px); box-shadow: 0 14px 34px rgba(6,182,212,0.14); }
+button:focus {
+    outline: none;
+    box-shadow: 0 6px 18px rgba(37,99,235,0.18), 0 0 0 4px rgba(37,99,235,0.08);
 }
 
-button:hover {
-    background-color: #005fa3;
-}
+.btn-secondary { background: #ffffff; color: #0f1724; border: 1px solid rgba(15,23,42,0.06); box-shadow: none; border-radius: 12px; }
+.btn-ghost { background: transparent; color: #e6f3ff; border: 1px dashed rgba(255,255,255,0.08); border-radius: 12px; }
 
-.container {
-    display: flex;
-    flex-direction: column; /* stack board and button vertically */
-    align-items: center;    /* center them horizontally */
-}
+/* action colors */
+#rotateBtn { background: linear-gradient(180deg,#34d399,#10b981) !important; color: white !important; box-shadow: 0 10px 28px rgba(16,185,129,0.14) !important; }
+#rollDiceBtn { background: linear-gradient(180deg,#f59e0b,#d97706) !important; color: white !important; box-shadow: 0 10px 28px rgba(245,158,11,0.14) !important; }
+#endTurnBtn { background: linear-gradient(180deg,#7c3aed,#6d28d9) !important; color: white !important; box-shadow: 0 10px 28px rgba(124,58,237,0.14) !important; }
 
-.cell.player1 {
-    background: #0077cc; /* blue */
-}
+.container { display: flex; flex-direction: column; align-items: center; }
 
-.cell.player2 {
-    background: #cc3300; /* red */
-}
+.cell.player1 { background: linear-gradient(180deg,#2563eb,#1e40af); color: white; }
+.cell.player2 { background: linear-gradient(180deg,#ef4444,#dc2626); color: white; }
+.cell.neutral { background: linear-gradient(180deg,#6b7280,#4b5563); color: white; }
+.cell.border-cell { background: #111827; cursor: not-allowed; pointer-events: none; }
 
-.cell.neutral {
-    background: #999999; /* grey for neutral pieces */
-}
+#instruction { font-size: 16px; color: #374151; margin-bottom: 10px; }
 
-.cell.border-cell {
-    background: #333;
-    cursor: not-allowed;
-}
+/* Status banner text color (match page blue background shade) */
+#status { color: #061226; font-size: 1.02rem; margin-bottom: 8px; }
 
-#instruction {
-    font-size: 16px;
-    color: #333;
-    margin-bottom: 10px;
-}
+/* Player bubble (main turn indicator, replaces turnBanner) */
+.player-bubble { display: inline-flex; align-items: center; gap: 10px; padding: 8px 16px; border-radius: 12px; font-weight: 700; box-shadow: 0 4px 12px rgba(37,99,235,0.18); }
+.player-bubble .player-label { background: rgba(255,255,255,0.12); width: 32px; height: 32px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; font-size:1rem; }
+.player-bubble .player-status { font-size: 1rem; }
+.player-bubble.player1 { background: linear-gradient(180deg,#2563eb,#1e40af); color: white; }
+.player-bubble.player2 { background: linear-gradient(180deg,#ef4444,#dc2626); color: white; }
+.player-bubble.player1 .player-label, .player-bubble.player1 .player-status { color: white; }
+.player-bubble.player2 .player-label, .player-bubble.player2 .player-status { color: white; }
 
-.cell.border-cell {
-    background: #000;
-    pointer-events: none; /* players can't click the wall */
-}
+.cell { position: relative; font-weight: 700; font-size: 13px; line-height: 1; text-align: center; }
+.cell.ghost { opacity: 0.5; }
+.cell.ghost-plus { background-color: #059669 !important; }
+.cell.ghost-minus { background-color: #ef4444 !important; }
 
-.cell { position: relative; }
+.polarity { position: absolute; font-weight: 800; font-size: 14px; font-family: monospace; color: white; width: 100%; height: 100%; display:flex; align-items:center; justify-content:center; pointer-events:none; }
 
-#rotateBtn {
-    transition: transform 0.3s ease;
-}
-
-.cell {
-    font-weight: bold;
-    font-size: 12px;
-    line-height: 1;
-    text-align: center;
-}
-
-.cell.player1 { background: #0077cc; color: white; }
-.cell.player2 { background: #cc3300; color: white; }
-.cell.neutral { background: gray; color: white; }
-
-.cell.ghost {
-    opacity: 0.5;
-}
-
-.cell.ghost-plus {
-    background-color: #cc0000 !important; /* greenish for + */
-}
-
-.cell.ghost-minus {
-    background-color: #3002fa !important; /* redish for – */
-}
-
-.polarity {
-    position: absolute;
-    font-weight: bold;
-    font-size: 12px;
-    font-family: monospace; /* Ensures consistent + and - width */
-    color: white;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    transform: none; /* Prevent any rotation */
-    writing-mode: horizontal-tb; /* Always horizontal */
-}
-
-
-/* Rotation visuals for polarity text */
-.polarity[data-rotation='0'] {
-    transform: rotate(0deg);
-}
-
-.polarity[data-rotation='90'] {
-    transform: rotate(90deg);
-}
-
-.polarity[data-rotation='180'] {
-    transform: rotate(180deg);
-}
-
-.polarity[data-rotation='270'] {
-    transform: rotate(270deg);
-}
-
-.cell.highlight {
-    outline: 2px solid yellow;
-}
+.cell.highlight { outline: 2px solid #fde047; box-shadow: 0 6px 16px rgba(253,224,71,0.12); }
 
 /* --- MAIN MENU --- */
-.menu-screen {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    margin-top: 100px;
-}
+.menu-screen { display:flex; flex-direction:column; align-items:center; justify-content:center; margin-top: 60px; }
 
-/* Main menu background using user's image */
-#mainMenu {
-    background-image: url('/static/images/FluxWarsCover.jpg');
-    background-size: cover;
-    background-position: center;
-    color: white;
-    position: relative;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 40px 20px;
-}
-
-#mainMenu::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.45);
-    backdrop-filter: blur(2px);
-    pointer-events: none;
-}
-
-#mainMenu > * {
-    position: relative;
-    z-index: 1;
-}
-
-.menu-screen button {
-    background: rgba(255,255,255,0.12);
-    border: 1px solid rgba(255,255,255,0.18);
-    color: white;
-}
+#mainMenu { background-image: url('/static/images/FluxWarsCover.jpg'); background-size: cover; background-position: center; color: white; position: fixed; inset: 0; min-height: 100vh; width: 100vw; display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 48px 28px; border-radius: 0; margin: 0; z-index: 100; }
+#mainMenu::before { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,0.45); backdrop-filter: blur(2px); pointer-events: none; }
+#mainMenu > * { position: relative; z-index: 1; }
+.menu-screen button { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.18); color: white; padding: 14px 22px; margin: 12px; width: 200px; font-size: 18px; border-radius: 14px; box-shadow: 0 8px 22px rgba(2,6,23,0.12); }
 
 /* Game screen background layer */
-#gameContainer {
-    position: relative;
-    overflow: hidden;
-    padding: 18px 12px;
-}
-.bg-layer {
-    position: absolute;
-    inset: 0;
-    background-image: url('/static/images/FluxWarsCover.jpg');
-    background-size: cover;
-    background-position: center;
-    transform-origin: center;
-    z-index: 0;
-    will-change: transform;
-    /* gentle slow pan animation */
-    animation: bg-slow-pan 24s ease-in-out infinite alternate;
-}
-
-@keyframes bg-slow-pan {
-    0% { transform: scale(1) translate(0px, 0px); }
-    100% { transform: scale(1.04) translate(12px, 8px); }
-}
+#gameContainer { position: relative; overflow: hidden; padding: 18px 12px; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(250,250,250,0.88)); border-radius: 12px; box-shadow: 0 18px 40px rgba(2,6,23,0.12); display: inline-block; transform: scale(1.25); transform-origin: center; }
+.bg-layer { position:absolute; inset:0; background-image: url('/static/images/FluxWarsCover.jpg'); background-size:cover; background-position:center; transform-origin:center; z-index:0; will-change:transform; animation: bg-slow-pan 28s ease-in-out infinite alternate; filter: saturate(0.9) blur(0.0px); }
+@keyframes bg-slow-pan { 0% { transform: scale(1) translate(0px, 0px); } 100% { transform: scale(1.04) translate(12px, 8px); } }
 
 /* ensure game content sits above the bg-layer */
-#gameContainer > *:not(.bg-layer) {
-    position: relative;
-    z-index: 1;
-}
+#gameContainer > *:not(.bg-layer) { position: relative; z-index: 1; }
 
 /* layout for board + controls + side panel */
-.game-main {
-    display: flex;
-    gap: 20px;
-    align-items: flex-start;
-    justify-content: center;
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-.controls {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    align-items: center;
-}
+.game-main { display: grid; grid-template-columns: auto 350px; column-gap: 16px; row-gap: 12px; align-items: start; justify-content: center; max-width: 1200px; margin: 0 auto; }
+.container { grid-column: 1; grid-row: 1; }
+.right-column { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 12px; }
+.controls { grid-column: 1 / -1; grid-row: 2; justify-content: center; }
+.controls { display: flex; flex-direction: row; gap: 6px; align-items: center; justify-content: center; margin-top: 8px; width: 100%; background: transparent; padding: 8px; border-radius: 10px; order: 3; }
 
 /* reduce visual clash on very small screens */
 @media (max-width: 600px) {
     .bg-layer { filter: brightness(0.7) saturate(0.9); }
-    .game-main { flex-direction: column; gap: 12px; }
+    .game-main { display: flex; flex-direction: column; gap: 12px; }
     .side-panel { width: 100%; }
-    #sidePanel { position: relative; right: auto; top: auto; }
-}
-
-.menu-screen button {
-    margin: 10px;
-    width: 180px;
-    font-size: 16px;
+    #sidePanel { position: relative; right: auto; top: auto; grid-column: auto; grid-row: auto; }
 }
 
 /* --- MODAL POPUPS --- */
-.modal {
-    display: none;
-    position: fixed;
-    z-index: 1000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0,0,0,0.4);
+.modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); }
+.modal-content { background-color: #fefefe; margin: 10% auto; padding: 20px; border-radius: 10px; width: 60%; max-width: 600px; text-align: left; color: #000000; }
+.modal-content h3, .modal-content p { color: #000000; }
+.close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+.close:hover { color: black; }
+
+/* icon-like tiny badge for dice animation */
+.dice-wrap { display:flex; align-items:center; gap:0px; }
+
+/* Dice result placed above side panel in right column */
+.dice-result-grid {
+    width: 325px;
+    align-self: start;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fbbf24, #f59e0b);
+    color: white;
+    box-shadow: 0 8px 20px rgba(245,158,11,0.18);
+}
+.dice-result-grid #diceResult { margin: 0; font-size: 1rem; font-weight: 800; }
+
+/* Mobile tweaks: reduce background clutter and scale controls */
+@media (max-width: 720px) {
+    body { background-attachment: scroll; }
+    .board { transform: scale(0.95); }
+    .cell { width: 34px; height: 34px; }
+    .side-panel { width: 100%; }
 }
 
-.modal-content {
-    background-color: #fefefe;
-    margin: 10% auto;
-    padding: 20px;
-    border-radius: 10px;
-    width: 60%;
-    max-width: 600px;
-    text-align: left;
+/* === Ensure control buttons render with intended pill styling === */
+.controls button, .controls input[type="button"], .controls .btn {
+    border-radius: 12px !important;
+    padding: 10px 18px !important;
+    font-weight: 700;
 }
 
-.close {
-    color: #aaa;
-    float: right;
-    font-size: 28px;
-    font-weight: bold;
-    cursor: pointer;
-}
-
-.close:hover {
-    color: black;
+/* Make dice result easier to read when embedded (if any other placement) */
+#diceResult {
+    font-weight: 800;
+    margin-left: 6px;
+    display: inline-block;
 }

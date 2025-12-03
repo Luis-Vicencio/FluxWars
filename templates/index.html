@@ -21,9 +21,14 @@
 
     <!-- GAME SCREEN (hidden until Start Game) -->
     <div id="gameContainer" style="display: none;">
-        <div id="turnBanner" class="turn-banner">Player {{ state.current_player }}'s Turn</div>
+        <div style="display:flex; gap:12px; align-items:center; justify-content:center; margin-bottom:12px;">
+            <div id="player1Bubble" class="player-bubble player1">
+                <span class="player-label">P1</span>
+                <span id="player1Status" class="player-status">(Phase: {{ state.phase.replace('_', ' ') }})</span>
+            </div>
+        </div>
 
-        <h2 id="status">(Phase: {{ state.phase.replace('_', ' ') }})</h2>
+        <h2 id="status" style="display:none;">(Phase: {{ state.phase.replace('_', ' ') }})</h2>
 
         <div class="game-main">
             <div class="container">
@@ -49,16 +54,21 @@
             <div class="dice-wrap">
                 <button id="rollDiceBtn" style="display: none;" class="dice-btn">🎲 Roll Dice</button>
                 <div id="diceAnim" class="dice-anim" aria-hidden="true"></div>
-                <p id="diceResult"></p>
             </div>
             <button id="endTurnBtn" style="display:none;">⏭️ End Turn</button>
         </div>
-            <div id="sidePanel" class="side-panel">
-            <h3>Move History</h3>
-            <div id="moveHistory" class="move-history"></div>
+            <div class="right-column">
+                <div id="diceResultBubble" class="dice-result-grid" style="display:none;">
+                    <span id="diceResult"></span>
+                </div>
+                <div id="sidePanel" class="side-panel">
+                    <h3>Move History</h3>
+                    <div id="moveHistory" class="move-history"></div>
+                </div>
             </div>
         </div>
     </div>
+
 
     <!-- POPUP MODALS -->
     <div id="modal" class="modal">

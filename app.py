@@ -8,7 +8,9 @@ from board import (
     reset_board,
     roll_dice,
     find_cluster,
+    get_cluster,
     can_move_cluster,
+    rotate_cluster_cells,
     get_dice,
 )
 
@@ -120,7 +122,19 @@ def roll_dice_route():
 def select_cluster_route():
     data = request.get_json()
     row, col = data["row"], data["col"]
-    cluster = find_cluster(row, col)
+    # Allow selecting neutral clusters (owner == 3) as well as player clusters
+    board = get_board()
+    owner = None
+    try:
+        owner = board[row][col]
+    except Exception:
+        owner = None
+
+    if owner == 3:
+        cluster = get_cluster(row, col)
+    else:
+        cluster = find_cluster(row, col)
+
     return jsonify({"cluster": cluster})
 
 
@@ -167,6 +181,50 @@ def move_cluster_route():
                 {
                     "success": False,
                     "message": f"Server error during move_cluster: {str(e)}",
+                    "traceback": tb,
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/rotate_cluster", methods=["POST"])
+def rotate_cluster_route():
+    try:
+        data = request.get_json()
+        cluster = data["cluster"]
+        remaining_moves = data.get("remaining_moves", None)
+        from board import rotate_cluster_cells, get_board, get_polarities, get_state, next_player
+
+        state_before = get_state()
+        actor = state_before["current_player"]
+
+        success, message, new_cluster = rotate_cluster_cells(cluster, actor_player=actor)
+
+        state = get_state()
+        if success and remaining_moves is not None and remaining_moves <= 0:
+            next_player()
+            message = "Turn ended. Next player's turn."
+
+        return jsonify(
+            {
+                "success": success,
+                "message": message,
+                "board": get_board(),
+                "polarities": get_polarities(),
+                "state": get_state_serializable(),
+                "new_cluster": [[int(r), int(c)] for (r, c) in new_cluster] if new_cluster else None,
+            }
+        )
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Server error during rotate_cluster: {str(e)}",
                     "traceback": tb,
                 }
             ),
