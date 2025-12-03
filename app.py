@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify
+from dotenv import load_dotenv
 from board import (
     get_board,
     get_state,
@@ -13,6 +14,9 @@ from board import (
     rotate_cluster_cells,
     get_dice,
 )
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -34,18 +38,47 @@ def toggle():
         data = request.get_json()
         row, col = data["row"], data["col"]
         orientation = int(data["orientation"])
-
-        success, message = toggle_piece(row, col, orientation)
-
-        return jsonify(
-            {
+        
+        # Check if trying to place AI player's piece during home_setup
+        state = get_state()
+        current_player = state.get("current_player")
+        ai_player = state.get("ai_player")
+        vs_ai = state.get("vs_ai", False)
+        phase = state.get("phase")
+        
+        if vs_ai and current_player == ai_player and phase == "home_setup":
+            # AI should place automatically during home setup
+            from board import PIECES, BOARD_SIZE
+            # Place AI piece at bottom right
+            ai_row, ai_col, ai_orient = 9, 10, 0
+            success, message = toggle_piece(ai_row, ai_col, ai_orient)
+            return jsonify({
                 "success": success,
-                "message": message,
+                "message": f"AI placed home piece automatically",
                 "board": get_board(),
                 "polarities": get_polarities(),
                 "state": get_state_serializable(),
-            }
-        )
+                "ai_placed": True
+            })
+
+        success, message = toggle_piece(row, col, orientation)
+        
+        # If successful and in setup, check if AI should place
+        result = {
+            "success": success,
+            "message": message,
+            "board": get_board(),
+            "polarities": get_polarities(),
+            "state": get_state_serializable(),
+        }
+        
+        if success and vs_ai:
+            state = get_state()
+            if state.get("current_player") == ai_player and state.get("phase") == "home_setup":
+                # AI should place its home piece automatically
+                result["ai_should_place"] = True
+        
+        return jsonify(result)
     except Exception as e:
         import traceback
 
@@ -75,6 +108,84 @@ def reset():
             "state": get_state_serializable(),
         }
     )
+
+
+@app.route("/update_settings", methods=["POST"])
+def update_settings():
+    try:
+        data = request.get_json() or {}
+        vs_ai = data.get("vs_ai", False)
+        difficulty = data.get("difficulty", "normal")
+        
+        state = get_state()
+        state["vs_ai"] = vs_ai
+        state["ai_difficulty"] = difficulty
+        state["ai_player"] = 2  # AI always plays as player 2
+        
+        return jsonify({
+            "success": True,
+            "message": "Settings updated",
+            "state": get_state_serializable()
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "message": f"Error updating settings: {str(e)}",
+            "traceback": traceback.format_exc()
+        }), 500
+
+@app.route("/ai_move", methods=["POST"])
+def ai_move_route():
+    """Execute an AI move based on current game state."""
+    try:
+        from board import get_state, get_board, get_polarities, get_dice
+        from ai_player import get_ai_move
+        
+        state = get_state()
+        
+        # Check if it's AI's turn
+        if not state.get("vs_ai", False):
+            return jsonify({"success": False, "message": "AI not enabled"}), 400
+        
+        if state["current_player"] != state.get("ai_player", 2):
+            return jsonify({"success": False, "message": "Not AI's turn"}), 400
+        
+        # Get AI move based on difficulty
+        difficulty = state.get("ai_difficulty", "normal")
+        print(f"AI attempting move with difficulty: {difficulty}")
+        
+        ai_move_func = get_ai_move(difficulty)
+        print(f"AI move function: {ai_move_func.__name__}")
+        
+        # Execute the AI move
+        move_result = ai_move_func()
+        print(f"AI move result: {move_result}")
+        
+        if not move_result:
+            print("AI move returned False/None")
+            return jsonify({
+                "success": False,
+                "message": "AI could not find a valid move"
+            }), 500
+        
+        return jsonify({
+            "success": True,
+            "message": f"AI ({difficulty}) made a move",
+            "board": get_board(),
+            "polarities": get_polarities(),
+            "state": get_state_serializable(),
+            "dice": get_dice()
+        })
+    except Exception as e:
+        import traceback
+        print(f"AI move exception: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "message": f"AI move error: {str(e)}",
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 # --- Movement Phase ---

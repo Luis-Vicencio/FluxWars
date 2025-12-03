@@ -546,6 +546,9 @@ game_state = {
     "winner": None,
     "main_turns": 0,
     "max_main_turns": 4,
+    "vs_ai": False,
+    "ai_difficulty": "normal",  # easy, normal, expert
+    "ai_player": 2,  # AI plays as player 2
 }
 
 PIECES = {
@@ -648,6 +651,11 @@ def toggle_piece(row, col, orientation):
 
 def reset_board():
     global board, polarities, magnet_ids, next_magnet_id, game_state, dice_value, selected_cluster
+    # Preserve AI settings across resets
+    vs_ai = game_state.get("vs_ai", False)
+    ai_difficulty = game_state.get("ai_difficulty", "normal")
+    ai_player = game_state.get("ai_player", 2)
+    
     board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
     polarities = [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
     magnet_ids = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
@@ -668,6 +676,9 @@ def reset_board():
         "winner": None,
         "main_turns": 0,
         "max_main_turns": 4,
+        "vs_ai": vs_ai,
+        "ai_difficulty": ai_difficulty,
+        "ai_player": ai_player,
     }
 
 

@@ -6,6 +6,7 @@ let selectedCluster = [];
 let diceValue = 0;
 let currentPhase = "home_setup";
 let lastBoard = null; // snapshot for detecting conversions
+window.gameState = null; // global game state for AI checking
 
 // ======================= MAIN SETUP =======================
 
@@ -23,13 +24,80 @@ document.addEventListener("DOMContentLoaded", () => {
     const bgLayer = document.querySelector('#gameContainer .bg-layer'); // harmless if null
 
     // --- MAIN MENU BUTTONS ---
-    document.getElementById("startGameBtn").addEventListener("click", () => {
+    document.getElementById("startGameBtn").addEventListener("click", async () => {
         mainMenu.style.display = "none";
         gameContainer.style.display = "block";
+        
+        // Check if AI should place immediately
+        await checkAISetup();
     });
 
     document.getElementById("settingsBtn").addEventListener("click", () => {
-        showModal("<h3>Settings</h3><p>No settings available yet — coming soon!</p>");
+        // Load current settings
+        const currentVsAi = window.gameState?.vs_ai || false;
+        const currentDifficulty = window.gameState?.ai_difficulty || 'normal';
+        
+        showModal(`
+            <h3>Settings</h3>
+            <div class="settings-content">
+                <div class="setting-item">
+                    <label class="setting-label">
+                        <span>VS AI</span>
+                        <label class="switch">
+                            <input type="checkbox" id="vsAiToggle" ${currentVsAi ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                </div>
+                <div class="setting-item" id="difficultySection" style="display: ${currentVsAi ? 'block' : 'none'};">
+                    <label class="setting-label">Difficulty</label>
+                    <div class="difficulty-selector">
+                        <button class="difficulty-btn ${currentDifficulty === 'easy' ? 'active' : ''}" data-difficulty="easy">Easy</button>
+                        <button class="difficulty-btn ${currentDifficulty === 'normal' ? 'active' : ''}" data-difficulty="normal">Normal</button>
+                        <button class="difficulty-btn ${currentDifficulty === 'expert' ? 'active' : ''}" data-difficulty="expert">Expert</button>
+                    </div>
+                </div>
+                <div class="setting-item">
+                    <button id="saveSettingsBtn" class="save-settings-btn">Save Settings</button>
+                </div>
+            </div>
+        `);
+        
+        // Handle VS AI toggle
+        const vsAiToggle = document.getElementById('vsAiToggle');
+        const difficultySection = document.getElementById('difficultySection');
+        
+        vsAiToggle.addEventListener('change', (e) => {
+            difficultySection.style.display = e.target.checked ? 'block' : 'none';
+        });
+        
+        // Handle difficulty selection
+        document.querySelectorAll('.difficulty-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.difficulty-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+        
+        // Save settings
+        document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
+            const vsAi = vsAiToggle.checked;
+            const difficulty = document.querySelector('.difficulty-btn.active')?.dataset.difficulty || 'normal';
+            
+            const res = await fetch('/update_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ vs_ai: vsAi, difficulty })
+            });
+            
+            const data = await res.json();
+            if (data.success && data.state) {
+                window.gameState = data.state;
+                updateStatus(data.state);
+                modal.style.display = 'none';
+                showModal(`<h3>Settings Saved</h3><p>VS AI: ${vsAi ? 'On' : 'Off'}<br>Difficulty: ${difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}</p>`);
+            }
+        });
     });
 
     document.getElementById("helpBtn").addEventListener("click", () => {
@@ -167,10 +235,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({ row, col, orientation }),
             });
             const data = await res.json();
-            if (data.success) {
+            if (data.success || data.ai_placed) {
                 updateStatus(data.state);
                 updateBoard(data.board, data.polarities, data.state.phase, data.state);
+                window.gameState = data.state;
                 clearGhostPreview();
+                
+                // If AI should place next, trigger AI setup
+                if (data.ai_should_place) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await aiSetupPiece();
+                }
             } else {
                 showModal(`<h3>Invalid placement</h3><p>${data.message || 'That placement is not allowed.'}</p>`);
             }
@@ -238,7 +313,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.success) {
             addHistoryEntry(`Moved cluster by (${dr},${dc})`);
             updateBoard(data.board, data.polarities, data.state?.phase || "main", data.state);
-            if (data.state) updateStatus(data.state);
+            if (data.state) {
+                updateStatus(data.state);
+                window.gameState = data.state;
+            }
             // Auto-select the new cluster returned by server for next move
             selectedCluster = data.new_cluster || [];
             highlightCluster(selectedCluster);
@@ -249,6 +327,8 @@ document.addEventListener("DOMContentLoaded", () => {
             if (diceValue <= 0) {
                 selectedCluster = [];
                 showModal('<h3>Out of moves</h3><p>You have no moves left this turn.</p>');
+                // Trigger AI if turn ended
+                await checkAndTriggerAI();
             }
         } else {
             showModal(`<h3>Move blocked</h3><p>${data.message || 'Movement could not be completed.'}</p>`);
@@ -448,6 +528,7 @@ function updateStatus(state) {
     const endTurnBtn = document.getElementById('endTurnBtn');
     const turnBanner = document.getElementById('turnBanner');
     currentPhase = state.phase;
+    window.gameState = state; // Store globally for AI checking
 
     // Game ended: freeze UI and show final result
     if (state.phase === "ended") {
@@ -545,10 +626,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.success) {
                 updateBoard(data.board, data.polarities, data.state.phase, data.state);
                 updateStatus(data.state);
+                window.gameState = data.state;
                 addHistoryEntry('Player ended turn early');
                 diceValue = 0;
                 const diceResult = document.getElementById('diceResult');
                 if (diceResult) diceResult.textContent = '';
+                
+                // Trigger AI move if enabled
+                await checkAndTriggerAI();
             } else {
                 showModal('<h3>End turn failed</h3><p>Unable to end the turn. Try again.</p>');
             }
@@ -651,6 +736,97 @@ function getPieceOffsets(orientation) {
         case 180: return [{ dr: 0, dc: 0, symbol: '+' }, { dr: 0, dc: -1, symbol: '-' }];
         case 270: return [{ dr: 0, dc: 0, symbol: '+' }, { dr: -1, dc: 0, symbol: '-' }];
         default: return [];
+    }
+}
+
+// ======================= AI MOVE TRIGGERING =======================
+
+async function checkAISetup() {
+    // Check if it's AI's turn to place during setup
+    if (!window.gameState) return;
+    
+    const vsAi = window.gameState.vs_ai || false;
+    const currentPlayer = window.gameState.current_player;
+    const aiPlayer = window.gameState.ai_player || 2;
+    const phase = window.gameState.phase;
+    
+    if (vsAi && currentPlayer === aiPlayer && phase === 'home_setup') {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await aiSetupPiece();
+    }
+}
+
+async function aiSetupPiece() {
+    // AI places its home piece automatically
+    try {
+        // Send dummy request - backend will handle AI placement
+        const res = await fetch('/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ row: 0, col: 0, orientation: 0 })  // Dummy values, backend will use AI position
+        });
+        
+        const data = await res.json();
+        if (data.success || data.ai_placed) {
+            updateBoard(data.board, data.polarities, data.state.phase, data.state);
+            updateStatus(data.state);
+            window.gameState = data.state;
+            addHistoryEntry('AI placed home piece');
+        }
+    } catch (err) {
+        console.error('AI setup failed:', err);
+    }
+}
+
+async function checkAndTriggerAI() {
+    if (!window.gameState) return;
+    
+    const vsAi = window.gameState.vs_ai || false;
+    const currentPlayer = window.gameState.current_player;
+    const aiPlayer = window.gameState.ai_player || 2;
+    const phase = window.gameState.phase;
+    
+    // Only trigger AI in main game phase and if it's AI's turn
+    if (!vsAi || currentPlayer !== aiPlayer || phase !== 'main') return;
+    
+    // Add visual indicator
+    const status = document.getElementById("status");
+    const originalText = status.textContent;
+    status.textContent = "AI is thinking...";
+    
+    // Add a small delay for visual feedback
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    try {
+        const res = await fetch('/ai_move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+            updateBoard(data.board, data.polarities, data.state.phase, data.state);
+            updateStatus(data.state);
+            if (data.dice !== undefined && data.dice !== null) {
+                diceValue = data.dice;
+                const diceResultElem = document.getElementById("diceResult");
+                if (diceResultElem) {
+                    diceResultElem.textContent = diceValue > 0 ? `Dice: ${diceValue}` : '';
+                }
+            }
+            window.gameState = data.state;
+            addHistoryEntry(`AI (${window.gameState.ai_difficulty}) completed turn`);
+        } else {
+            status.textContent = originalText;
+            console.error('AI move failed:', data.message);
+            if (data.traceback) console.error(data.traceback);
+            showModal(`<h3>AI Error</h3><p>${data.message}</p>`);
+        }
+    } catch (err) {
+        status.textContent = originalText;
+        console.error('AI move failed:', err);
+        showModal(`<h3>AI Error</h3><p>Failed to execute AI move</p>`);
     }
 }
 
