@@ -225,16 +225,21 @@ def _apply_post_move_effects(moved_positions, actor_player, cluster_positions, n
             scheduled_targets.add(target_pair)
 
     # Apply scheduled pulls (clear old cells then set new positions)
+    global magnet_ids
     for owner, originals, targets, pols in pulls:
+        # preserve magnet ID
+        magnet_id = magnet_ids[originals[0][0]][originals[0][1]]
         # clear originals
         for (or_r, or_c) in originals:
             board[or_r][or_c] = 0
             polarities[or_r][or_c] = ""
-        # set targets in same order
+            magnet_ids[or_r][or_c] = 0
+        # set targets in same order with same magnet ID
         for (t, p) in zip(targets, pols):
             tr, tc = t
             board[tr][tc] = owner
             polarities[tr][tc] = p
+            magnet_ids[tr][tc] = magnet_id
 
     # Only allow conversion if actor_player is 1 or 2 and the cluster includes player-owned tiles
     if actor_player in (1,2) and any(board[r][c] == actor_player for (r,c) in cluster_positions):
@@ -251,6 +256,7 @@ def _apply_post_move_effects(moved_positions, actor_player, cluster_positions, n
                 neigh_pol = polarities[ar][ac]
                 if neigh_pol in ("+","-") and neigh_pol != moved_pol:
                     board[ar][ac] = actor_player
+                    # Keep the same magnet_id when converting ownership
                     converted_cells.append((ar, ac))
 
         # update stats: recompute ownership of initial neutral clusters
@@ -363,21 +369,26 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
                 return False, "Blocked.", None
 
     # copy board
+    global magnet_ids
     new_board = [row[:] for row in board]
     new_pol = [row[:] for row in polarities]
+    new_ids = [row[:] for row in magnet_ids]
 
     # clear old positions only for moving tiles
     for (r,c) in moving_positions:
         new_board[r][c] = 0
         new_pol[r][c] = ""
+        new_ids[r][c] = 0
 
     # place moved tiles
     for (r,c),(nr,nc) in zip(moving_positions, new_moving_positions):
         new_board[nr][nc] = board[r][c]
         new_pol[nr][nc] = polarities[r][c]
+        new_ids[nr][nc] = magnet_ids[r][c]
 
     board = new_board
     polarities = new_pol
+    magnet_ids = new_ids
 
     # derive moved positions from new board state (only for moved tiles)
     moved_positions = []
@@ -450,23 +461,32 @@ def rotate_cluster_cells(cluster, actor_player=None):
         return False, "Rotation blocked.", None
 
     # perform rotation: clear originals then set new positions
+    global magnet_ids
     new_board = [row[:] for row in board]
     new_pol = [row[:] for row in polarities]
+    new_ids = [row[:] for row in magnet_ids]
+    
+    # preserve the magnet ID
+    magnet_id = magnet_ids[r1][c1]
 
     # clear originals
     for (or_r, or_c) in originals:
         new_board[or_r][or_c] = 0
         new_pol[or_r][or_c] = ""
+        new_ids[or_r][or_c] = 0
 
     # pivot (r1,c1) stays; second cell moves to (new_r2,new_c2)
     new_board[r1][c1] = actor_player
     new_pol[r1][c1] = polarities[r1][c1]
+    new_ids[r1][c1] = magnet_id
 
     new_board[new_r2][new_c2] = actor_player
     new_pol[new_r2][new_c2] = polarities[r2][c2]
+    new_ids[new_r2][new_c2] = magnet_id
 
     board = new_board
     polarities = new_pol
+    magnet_ids = new_ids
 
     # moved positions list
     moved_positions = [(r1, c1), (new_r2, new_c2)]
@@ -509,6 +529,8 @@ def get_dice():
 
 board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
 polarities = [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+magnet_ids = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+next_magnet_id = 1
 
 game_state = {
     "current_player": 1,
@@ -557,10 +579,15 @@ def is_in_opponent_half(player, col):
     return False
 
 def place_piece(piece, row, col, value):
+    global next_magnet_id
+    magnet_id = next_magnet_id
+    next_magnet_id += 1
+    
     for (dr, dc), polarity in piece:
         r, c = row + dr, col + dc
         board[r][c] = value
         polarities[r][c] = polarity
+        magnet_ids[r][c] = magnet_id
 
 def toggle_piece(row, col, orientation):
     state = game_state
@@ -620,9 +647,11 @@ def toggle_piece(row, col, orientation):
 # ==============================================================
 
 def reset_board():
-    global board, polarities, game_state, dice_value, selected_cluster
+    global board, polarities, magnet_ids, next_magnet_id, game_state, dice_value, selected_cluster
     board = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
     polarities = [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+    magnet_ids = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+    next_magnet_id = 1
     dice_value = 0
     selected_cluster = []
     game_state = {
@@ -674,7 +703,10 @@ def next_player():
             game_state["phase"] = "ended"
             return game_state["current_player"]
 
+    # switch active player and reset dice for the new turn
     game_state["current_player"] = 2 if game_state["current_player"] == 1 else 1
+    global dice_value
+    dice_value = 0
     return game_state["current_player"]
 
 
@@ -785,92 +817,176 @@ def ai_place_all_neutrals(threshold=4):
 # ==============================================================
 
 def get_stealable_neutrals_for_player(player):
+    """
+    Return opponent-owned cells that can be stolen by `player`.
+    
+    Stealing rules:
+    - Can steal ANY opponent piece EXCEPT their home piece
+    - Player must have at least one piece on the board
+    - Opponent piece must have a polarity ('+' or '-')
+    
+    Returns list of (row, col) tuples for all opponent pieces.
+    """
     opponent = 2 if player == 1 else 1
     res = []
-
-    initial_clusters = game_state.get('initial_neutral_clusters', [])
-    if initial_clusters:
-        for cl in initial_clusters:
-            for (r,c) in cl:
-                if board[r][c] != opponent:
-                    continue
-                pol = polarities[r][c]
-                if pol not in ('+','-'):
-                    continue
-
-                eligible = False
-                for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                    nr, nc = r+dr, c+dc
-                    if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
-                        if board[nr][nc] == player:
-                            neigh = polarities[nr][nc]
-                            if neigh in ('+','-') and neigh != pol:
-                                eligible = True
-                                break
-                if eligible:
-                    res.append((r,c))
-
-        if not res:
-            adj_only = []
-            for cl in initial_clusters:
-                for (r,c) in cl:
-                    if board[r][c] != opponent:
-                        continue
-                    for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                        nr, nc = r+dr, c+dc
-                        if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
-                            if board[nr][nc] == player:
-                                adj_only.append((r,c))
-                                break
-            return adj_only
-
-        return res
-
-    # fallback
+    
+    # Check if player has any pieces on the board
+    player_has_pieces = False
     for r in range(BOARD_SIZE):
         for c in range(BOARD_SIZE):
-            if board[r][c] != 3:
-                continue
-            pol = polarities[r][c]
-            if pol not in ('+','-'):
-                continue
-
-            eligible = False
-            for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                nr, nc = r+dr, c+dc
-                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
-                    if board[nr][nc] == player:
-                        neigh = polarities[nr][nc]
-                        if neigh in ('+','-') and neigh != pol:
-                            eligible = True
-                            break
-            if eligible:
-                res.append((r,c))
-
+            if board[r][c] == player:
+                player_has_pieces = True
+                break
+        if player_has_pieces:
+            break
+    
+    if not player_has_pieces:
+        return []
+    
+    # Get opponent's home piece coordinates to exclude them
+    home_info = game_state.get("homes", {}).get(opponent)
+    home_cells = set()
+    if home_info:
+        home_row, home_col, home_orientation = home_info
+        piece_offsets = PIECES[home_orientation]
+        for (dr, dc), _ in piece_offsets:
+            home_cells.add((home_row + dr, home_col + dc))
+    
+    # Return all opponent pieces with polarity (excluding home pieces)
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if board[r][c] == opponent and (r, c) not in home_cells:
+                pol = polarities[r][c]
+                if pol in ('+', '-'):
+                    res.append((r, c))
+    
     return res
 
 
-def steal_neutral_cell(actor_player, target=None):
+def steal_and_place_magnet(actor_player, source, target):
+    """
+    Steal an opponent's magnet and place it at the target location.
+    
+    Args:
+        actor_player: The player stealing (1 or 2)
+        source: (row, col) of the opponent piece to steal
+        target: (row, col) where to place the stolen magnet
+    
+    Returns:
+        (success, message, moved_cells)
+    """
     if actor_player not in (1,2):
         return False, "Invalid player", []
 
     if game_state.get("phase") == "ended":
         return False, "Game over — cannot steal.", []
 
+    opponent = 2 if actor_player == 1 else 1
+    
+    # Check if source is a home piece - cannot steal home pieces
+    home_info = game_state.get("homes", {}).get(opponent)
+    if home_info:
+        home_row, home_col, home_orientation = home_info
+        piece_offsets = PIECES[home_orientation]
+        for (dr, dc), _ in piece_offsets:
+            if (home_row + dr, home_col + dc) == source:
+                return False, "Cannot steal opponent's home piece", []
+
     eligible = get_stealable_neutrals_for_player(actor_player)
     if not eligible:
-        return False, "No eligible neutral pieces to steal", []
+        return False, "No eligible pieces to steal", []
 
-    if target:
-        if target not in eligible:
-            return False, "Requested target not eligible", []
-        chosen = target
-    else:
-        chosen = random.choice(eligible)
+    if source not in eligible:
+        return False, "Requested piece not eligible for stealing", []
 
-    cr, cc = chosen
+    sr, sc = source
+    tr, tc = target
 
-    board[cr][cc] = actor_player
+    # Find the partner cell of the source magnet using magnet ID
+    source_pol = polarities[sr][sc]
+    source_magnet_id = magnet_ids[sr][sc]
+    partner = None
+    partner_pol = None
+    
+    # Find the cell with the same magnet ID (the other half of the 2x1 magnet)
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if (r, c) != (sr, sc) and magnet_ids[r][c] == source_magnet_id:
+                partner = (r, c)
+                partner_pol = polarities[r][c]
+                break
+        if partner:
+            break
+    
+    if not partner:
+        return False, "Could not find partner cell for magnet", []
+    
+    # Verify partner belongs to opponent
+    if board[partner[0]][partner[1]] != opponent:
+        return False, "Partner cell doesn't belong to opponent", []
+
+    # Validate target placement
+    # Target must be empty or be one of the source cells we're moving
+    source_cells = {source, partner}
+    if board[tr][tc] != 0 and (tr, tc) not in source_cells:
+        return False, "Target location is occupied", []
+    
+    # Target must be adjacent to actor's cluster with opposite polarity
+    target_adjacent_valid = False
+    target_pol_needed = None
+    
+    for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+        ar, ac = tr+dr, tc+dc
+        if 0 <= ar < BOARD_SIZE and 0 <= ac < BOARD_SIZE:
+            if board[ar][ac] == actor_player:
+                adj_pol = polarities[ar][ac]
+                if adj_pol in ('+','-'):
+                    # Target cell needs opposite polarity to connect
+                    target_adjacent_valid = True
+                    # We'll place source_pol at target if it's opposite to adjacent
+                    if adj_pol != source_pol:
+                        target_pol_needed = source_pol
+                    break
+    
+    if not target_adjacent_valid:
+        return False, "Target must be adjacent to your cluster", []
+    
+    # Determine orientation: which cell goes to target, which goes to partner location
+    # We place source magnet at target, and need to find valid spot for partner
+    # Partner must be adjacent to target
+    partner_target = None
+    for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+        pr, pc = tr+dr, tc+dc
+        if 0 <= pr < BOARD_SIZE and 0 <= pc < BOARD_SIZE:
+            if board[pr][pc] == 0 or (pr, pc) in source_cells:
+                partner_target = (pr, pc)
+                break
+    
+    if not partner_target:
+        return False, "No space for partner cell near target", []
+
+    # Clear source cells
+    global next_magnet_id
+    board[sr][sc] = 0
+    polarities[sr][sc] = ""
+    magnet_ids[sr][sc] = 0
+    board[partner[0]][partner[1]] = 0
+    polarities[partner[0]][partner[1]] = ""
+    magnet_ids[partner[0]][partner[1]] = 0
+
+    # Assign new magnet ID for the stolen magnet
+    new_magnet_id = next_magnet_id
+    next_magnet_id += 1
+
+    # Place stolen magnet at target with new ID
+    board[tr][tc] = actor_player
+    polarities[tr][tc] = source_pol
+    magnet_ids[tr][tc] = new_magnet_id
+    board[partner_target[0]][partner_target[1]] = actor_player
+    polarities[partner_target[0]][partner_target[1]] = partner_pol
+    magnet_ids[partner_target[0]][partner_target[1]] = new_magnet_id
+
+    moved_cells = [(tr, tc), partner_target]
 
     # Update cluster ownership
     for idx, cl in enumerate(game_state.get("initial_neutral_clusters", [])):
@@ -891,7 +1007,7 @@ def steal_neutral_cell(actor_player, target=None):
 
     check_winner()
 
-    return True, "Stole neutral piece.", [chosen]
+    return True, f"Stole opponent magnet to ({tr},{tc}).", moved_cells
 
 
 # ==============================================================

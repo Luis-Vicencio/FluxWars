@@ -93,6 +93,33 @@ def roll_dice_route():
             # mark allowed stealer on server state
             state["steal_allowed_player"] = cp
             steal_targets = get_stealable_neutrals_for_player(cp)
+            
+            # DEBUG: Log steal target detection details
+            print(f"\n=== STEAL TARGET DEBUG ===")
+            print(f"Current player: {cp}")
+            print(f"Phase: {state['phase']}")
+            print(f"Steal targets found: {steal_targets}")
+            print(f"Number of targets: {len(steal_targets) if steal_targets else 0}")
+            
+            # Log opponent positions
+            opponent = 2 if cp == 1 else 1
+            board_state = get_board()
+            pols = get_polarities()
+            opponent_pieces = []
+            for r in range(len(board_state)):
+                for c in range(len(board_state[0])):
+                    if board_state[r][c] == opponent:
+                        opponent_pieces.append((r, c, pols[r][c]))
+            print(f"Opponent (player {opponent}) pieces: {opponent_pieces[:10]}")  # limit output
+            
+            # Log player pieces
+            player_pieces = []
+            for r in range(len(board_state)):
+                for c in range(len(board_state[0])):
+                    if board_state[r][c] == cp:
+                        player_pieces.append((r, c, pols[r][c]))
+            print(f"Player {cp} pieces: {player_pieces[:10]}")  # limit output
+            print(f"=========================\n")
 
         return jsonify({
             "success": True,
@@ -270,12 +297,14 @@ def end_turn_route():
 def steal_route():
     try:
         data = request.get_json() or {}
-        row = data.get("row")
-        col = data.get("col")
+        source_row = data.get("source_row")
+        source_col = data.get("source_col")
+        target_row = data.get("target_row")
+        target_col = data.get("target_col")
 
         from board import (
             get_state,
-            steal_neutral_cell,
+            steal_and_place_magnet,
             get_board,
             get_polarities,
             get_state_serializable,
@@ -288,18 +317,20 @@ def steal_route():
         if state.get("steal_allowed_player") != actor:
             return jsonify({"success": False, "message": "Steal not allowed right now."}), 400
 
-        target = None
-        if row is not None and col is not None:
-            target = (int(row), int(col))
+        if source_row is None or source_col is None or target_row is None or target_col is None:
+            return jsonify({"success": False, "message": "Missing source or target coordinates."}), 400
 
-        success, message, converted = steal_neutral_cell(actor, target=target)
+        source = (int(source_row), int(source_col))
+        target = (int(target_row), int(target_col))
+
+        success, message, moved_cells = steal_and_place_magnet(actor, source, target)
         if success:
             # clear steal permission after use
             state["steal_allowed_player"] = None
             return jsonify({
                 "success": True,
                 "message": message,
-                "converted": [list(x) for x in converted],
+                "moved_cells": [list(x) for x in moved_cells],
                 "board": get_board(),
                 "polarities": get_polarities(),
                 "state": get_state_serializable(),
