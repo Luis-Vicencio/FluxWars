@@ -11,4 +11,6 @@ How to Play
 2. Type in Terminal
     ```bash
     pip install flask
+    pip install python-dotenv
+    pip install openai
     python app.py
