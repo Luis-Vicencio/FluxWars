@@ -88,11 +88,49 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- ROTATE BUTTON ---
-    rotateBtn.addEventListener("click", () => {
-        orientationIndex = (orientationIndex + 1) % orientations.length;
-        orientation = orientations[orientationIndex];
-        orientationLabel.textContent = `${orientation}°`;
-        clearGhostPreview();
+    rotateBtn.addEventListener("click", async () => {
+        // In setup phases, rotate piece orientation as before
+        if (currentPhase !== "main") {
+            orientationIndex = (orientationIndex + 1) % orientations.length;
+            orientation = orientations[orientationIndex];
+            orientationLabel.textContent = `${orientation}°`;
+            clearGhostPreview();
+            return;
+        }
+
+        // In main phase: rotate selected cluster for cost of one move
+        if (!selectedCluster || !selectedCluster.length) {
+            showModal('<h3>Rotate piece</h3><p>Select a piece to rotate first.</p>');
+            return;
+        }
+        if (diceValue <= 0) {
+            showModal('<h3>No moves remaining</h3><p>Roll the dice first.</p>');
+            return;
+        }
+
+        const res = await fetch('/rotate_cluster', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cluster: selectedCluster, remaining_moves: diceValue - 1 })
+        });
+        const data = await res.json();
+        if (data.success) {
+            addHistoryEntry('Rotated piece');
+            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
+            if (data.state) updateStatus(data.state);
+            // update selected cluster to server-provided new cluster
+            selectedCluster = data.new_cluster || [];
+            highlightCluster(selectedCluster);
+            diceValue -= 1;
+            const diceResult = document.getElementById('diceResult');
+            if (diceResult) diceResult.textContent = `🎲 Moves left: ${diceValue}`;
+            if (diceValue <= 0) {
+                selectedCluster = [];
+                showModal('<h3>Out of moves</h3><p>You have no moves left this turn.</p>');
+            }
+        } else {
+            showModal(`<h3>Rotation failed</h3><p>${data.message || 'Could not rotate this piece.'}</p>`);
+        }
     });
 
     // --- BOARD CLICK (phase-dependent) ---
@@ -108,7 +146,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (currentPhase === "main") {
             // SELECT CLUSTER (main phase)
             if (diceValue === 0) {
-                alert("Roll the dice first!");
+                showModal('<h3>Roll required</h3><p>Roll the dice first!</p>');
                 return;
             }
             const res = await fetch("/select_cluster", {
@@ -134,7 +172,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 updateBoard(data.board, data.polarities, data.state.phase);
                 clearGhostPreview();
             } else {
-                alert(data.message || "Invalid placement!");
+                showModal(`<h3>Invalid placement</h3><p>${data.message || 'That placement is not allowed.'}</p>`);
             }
         }
     });
@@ -161,6 +199,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.success) {
             diceValue = data.dice;
             diceResult.textContent = `🎲 You rolled a ${diceValue}`;
+            const diceResultBubble = document.getElementById('diceResultBubble');
+            if (diceResultBubble) diceResultBubble.style.display = 'inline-flex';
             addHistoryEntry(`Player rolled ${diceValue}`);
             // Update UI to reflect new turn/board state returned by server
             if (data.state) updateStatus(data.state);
@@ -204,12 +244,14 @@ document.addEventListener("DOMContentLoaded", () => {
             highlightCluster(selectedCluster);
             diceValue -= 1;
             diceResult.textContent = `🎲 Moves left: ${diceValue}`;
+            const diceResultBubble = document.getElementById('diceResultBubble');
+            if (diceResultBubble) diceResultBubble.style.display = diceValue > 0 ? 'inline-flex' : 'none';
             if (diceValue <= 0) {
                 selectedCluster = [];
-                alert("Out of moves!");
+                showModal('<h3>Out of moves</h3><p>You have no moves left this turn.</p>');
             }
         } else {
-            alert(data.message);
+            showModal(`<h3>Move blocked</h3><p>${data.message || 'Movement could not be completed.'}</p>`);
         }
     });
 });
@@ -336,7 +378,7 @@ function showStealOptions(targets) {
                 if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
                 if (data.state) updateStatus(data.state);
             } else {
-                alert(data.message || 'Steal failed');
+                showModal(`<h3>Steal failed</h3><p>${data.message || 'No valid steal action available.'}</p>`);
             }
         });
     });
@@ -383,13 +425,14 @@ function updateStatus(state) {
         return;
     }
 
-    // update turn banner color and text
-    if (turnBanner) {
-        turnBanner.textContent = `Player ${state.current_player}'s Turn`;
+    // update player bubble color based on current player
+    const player1Bubble = document.getElementById('player1Bubble');
+    if (player1Bubble) {
+        player1Bubble.classList.remove('player1', 'player2');
         if (state.current_player === 1) {
-            turnBanner.style.background = 'linear-gradient(90deg, #2b6cb0, #2b6cb0)';
+            player1Bubble.classList.add('player1');
         } else if (state.current_player === 2) {
-            turnBanner.style.background = 'linear-gradient(90deg, #e53e3e, #e53e3e)';
+            player1Bubble.classList.add('player2');
         }
     }
 
@@ -414,6 +457,14 @@ function updateStatus(state) {
         status.textContent = `Player ${state.current_player}'s Turn (Phase: ${state.phase})`;
         if (rollDiceBtn) rollDiceBtn.style.display = "none";
         if (endTurnBtn) endTurnBtn.style.display = 'none';
+    }
+
+    // Mirror status into the Player 1 bubble if present, and ensure text is white
+    const player1StatusEl = document.getElementById('player1Status');
+    if (player1StatusEl) {
+        player1StatusEl.textContent = status.textContent;
+        // ensure color set via CSS; if not, force white for readability
+        player1StatusEl.style.color = '';
     }
 
     // If winner declared early (by majority, etc.) while still not marked "ended"
@@ -449,7 +500,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const diceResult = document.getElementById('diceResult');
                 if (diceResult) diceResult.textContent = '';
             } else {
-                alert('Failed to end turn');
+                showModal('<h3>End turn failed</h3><p>Unable to end the turn. Try again.</p>');
             }
         });
     }

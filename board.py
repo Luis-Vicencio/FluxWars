@@ -12,6 +12,9 @@ selected_cluster = []
 
 def roll_dice():
     global dice_value
+    if dice_value != 0:
+        # Dice already rolled this turn, return existing value
+        return dice_value
     dice_value = random.randint(1, 6)
     return dice_value
 
@@ -141,6 +144,139 @@ def can_move_cluster(cluster, dr, dc):
     return True
 
 
+def _apply_post_move_effects(moved_positions, actor_player, cluster_positions, new_moving_positions):
+    """
+    Apply force-pull and conversion rules after tiles have been moved on the global `board`.
+    Returns list of converted tile positions (r,c).
+    """
+    global board, polarities, game_state
+    converted_cells = []
+
+    # --------------------------
+    # FORCE-PULL: magnets attract if opposite polarity and exactly one cell between
+    # (same rules as previously implemented)
+    # --------------------------
+    pulls = []  # list of tuples: (owner, [(fr,fc),(pr,pc)], [(t1r,t1c),(t2r,t2c)], [pol1,pol2])
+    scheduled_targets = set()
+
+    rows = len(board)
+    cols = len(board[0])
+    for (nr, nc) in moved_positions:
+        moved_pol = polarities[nr][nc]
+        moved_owner = board[nr][nc]
+        if moved_pol not in ("+","-"):
+            continue
+        for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
+            mid_r, mid_c = nr+ddr, nc+ddc
+            far_r, far_c = nr+2*ddr, nc+2*ddc
+            if not (0 <= mid_r < rows and 0 <= mid_c < cols and 0 <= far_r < rows and 0 <= far_c < cols):
+                continue
+            # middle must be empty
+            if board[mid_r][mid_c] != 0:
+                continue
+            # far must be a magnetic tile with opposite polarity
+            far_owner = board[far_r][far_c]
+            far_pol = polarities[far_r][far_c]
+            if far_pol not in ("+","-") or far_pol == moved_pol:
+                continue
+
+            # Only allow player clusters to pull neutrals toward themselves
+            if not (moved_owner in (1,2) and far_owner == 3):
+                continue
+
+            # Find the paired tile for the far tile (its 2x1 piece partner)
+            pair = None
+            for adr, adc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                pr, pc = far_r+adr, far_c+adc
+                if not (0 <= pr < rows and 0 <= pc < cols):
+                    continue
+                if (pr, pc) == (nr, nc):
+                    # skip the moved tile itself
+                    continue
+                if board[pr][pc] == far_owner and polarities[pr][pc] in ("+","-") and polarities[pr][pc] != far_pol:
+                    pair = (pr, pc)
+                    break
+            if not pair:
+                continue
+
+            # targets for the pulled piece (move toward moved tile by one step)
+            target_far = (mid_r, mid_c)
+            target_pair = (pair[0]-ddr, pair[1]-ddc)
+
+            # validate targets in bounds
+            if not (0 <= target_pair[0] < rows and 0 <= target_pair[1] < cols):
+                continue
+
+            # targets must be empty or be the current positions of the originals
+            original_cells = [(far_r, far_c), pair]
+            original_set = set(original_cells)
+            # allow moving into a slot currently occupied by one of the originals (it will be cleared)
+            if board[target_far[0]][target_far[1]] != 0 and (target_far not in original_set):
+                continue
+            if board[target_pair[0]][target_pair[1]] != 0 and (target_pair not in original_set):
+                continue
+            if target_far in scheduled_targets or target_pair in scheduled_targets:
+                continue
+
+            # schedule this pull
+            target_cells = [target_far, target_pair]
+            pulls.append((far_owner, original_cells, target_cells, [far_pol, polarities[pair[0]][pair[1]]]))
+            scheduled_targets.add(target_far)
+            scheduled_targets.add(target_pair)
+
+    # Apply scheduled pulls (clear old cells then set new positions)
+    for owner, originals, targets, pols in pulls:
+        # clear originals
+        for (or_r, or_c) in originals:
+            board[or_r][or_c] = 0
+            polarities[or_r][or_c] = ""
+        # set targets in same order
+        for (t, p) in zip(targets, pols):
+            tr, tc = t
+            board[tr][tc] = owner
+            polarities[tr][tc] = p
+
+    # Only allow conversion if actor_player is 1 or 2 and the cluster includes player-owned tiles
+    if actor_player in (1,2) and any(board[r][c] == actor_player for (r,c) in cluster_positions):
+        for (nr, nc) in moved_positions:
+            moved_pol = polarities[nr][nc]
+            if moved_pol not in ("+","-"):
+                continue
+            for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                ar, ac = nr+ddr, nc+ddc
+                if not (0 <= ar < rows and 0 <= ac < cols):
+                    continue
+                if board[ar][ac] != 3:   # must be neutral
+                    continue
+                neigh_pol = polarities[ar][ac]
+                if neigh_pol in ("+","-") and neigh_pol != moved_pol:
+                    board[ar][ac] = actor_player
+                    converted_cells.append((ar, ac))
+
+        # update stats: recompute ownership of initial neutral clusters
+        if converted_cells:
+            game_state["last_cluster_acquirer"] = actor_player
+            # Re-evaluate each initial neutral cluster's owner and update counts
+            for idx, cl in enumerate(game_state.get("initial_neutral_clusters", [])):
+                owners = set(board[r][c] for (r, c) in cl)
+                owners.discard(0)
+                owners.discard(3)
+
+                if len(owners) == 1:
+                    owner = owners.pop()
+                    prev = game_state["neutral_cluster_owners"].get(idx)
+                    if prev != owner:
+                        if prev in (1, 2):
+                            game_state["acquired_clusters"][prev] -= 1
+
+                        game_state["neutral_cluster_owners"][idx] = owner
+                        game_state["acquired_clusters"][owner] += 1
+
+            check_winner()
+
+    return converted_cells
+
+
 # ==============================================================
 #   MOVE EXECUTION WITH CORRECT SINGLE-TILE CONVERSION
 # ==============================================================
@@ -156,9 +292,49 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
 
     if game_state.get("phase") == "ended":
         return False, "Game over — no moves allowed.", None
+    # Only allow moves if dice has been rolled
+    if dice_value == 0:
+        return False, "You must roll the dice before moving.", None
+    # Only allow current player to move
+    if actor_player != game_state.get("current_player"):
+        return False, "It's not your turn.", None
 
     cluster_positions = [tuple(x) for x in cluster]
     cluster_set = set(cluster_positions)
+    # Determine which tiles should actually move:
+    # - If the cluster includes any tiles owned by the actor_player, only move those actor-owned tiles
+    # - Otherwise (cluster is neutral-only), allow moving the neutral tiles
+    global board, polarities
+
+    rows = len(board)
+    cols = len(board[0])
+
+    actor_owned_present = False
+    for (r, c) in cluster_positions:
+        if board[r][c] == actor_player:
+            actor_owned_present = True
+            break
+
+    if actor_owned_present:
+        # Move the entire cluster (player-owned tiles + joined neutral tiles).
+        # For neutral tiles, always move both blocks of a 2x1 magnet if any block is included.
+        moving_positions = set(cluster_positions)
+        # Find all neutral tiles in cluster
+        neutral_tiles = [pos for pos in cluster_positions if board[pos[0]][pos[1]] == 3]
+        for (nr, nc) in neutral_tiles:
+            # For each neutral tile, find its 2x1 partner
+            for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                pr, pc = nr+ddr, nc+ddc
+                if 0 <= pr < rows and 0 <= pc < cols:
+                    if board[pr][pc] == 3 and polarities[pr][pc] in ("+","-") and polarities[pr][pc] != polarities[nr][nc]:
+                        # Add both blocks to moving_positions
+                        moving_positions.add((pr, pc))
+                        moving_positions.add((nr, nc))
+        moving_positions = list(moving_positions)
+    else:
+        moving_positions = list(cluster_positions)
+
+    moving_set = set(moving_positions)
 
     rows = len(board)
     cols = len(board[0])
@@ -169,86 +345,145 @@ def move_cluster_cells(cluster, dr, dc, actor_player=None):
             if board[r][c] not in (actor_player, 3):
                 return False, "Cannot move opponent pieces.", None
 
-    # calculate target
-    new_positions = []
-    for (r,c) in cluster_positions:
+    # calculate target for only the moving positions
+    new_moving_positions = []
+    for (r,c) in moving_positions:
         nr, nc = r+dr, c+dc
         if not (0 <= nr < rows and 0 <= nc < cols):
             return False, "Out of bounds.", None
-        new_positions.append((nr, nc))
+        new_moving_positions.append((nr, nc))
 
-    # collision check
-    for pos in new_positions:
-        if pos not in cluster_set:
+    # collision check against non-moving cells
+    # allow moving into neutral tiles (board == 3) so player pieces can displace/capture neutrals
+    for pos in new_moving_positions:
+        if pos not in moving_set:
             nr, nc = pos
-            if board[nr][nc] != 0:
+            # allow moving into empty or neutral cells; block other players' tiles
+            if board[nr][nc] != 0 and board[nr][nc] != 3:
                 return False, "Blocked.", None
 
     # copy board
     new_board = [row[:] for row in board]
     new_pol = [row[:] for row in polarities]
 
-    # clear old
-    for (r,c) in cluster_positions:
+    # clear old positions only for moving tiles
+    for (r,c) in moving_positions:
         new_board[r][c] = 0
         new_pol[r][c] = ""
 
-    # place new
-    for (r,c),(nr,nc) in zip(cluster_positions, new_positions):
+    # place moved tiles
+    for (r,c),(nr,nc) in zip(moving_positions, new_moving_positions):
         new_board[nr][nc] = board[r][c]
         new_pol[nr][nc] = polarities[r][c]
 
     board = new_board
     polarities = new_pol
 
-    # --------------------------
-    # SINGLE-TILE conversion rule
-    # --------------------------
-    converted_cells = []
+    # derive moved positions from new board state (only for moved tiles)
+    moved_positions = []
+    for (r, c) in moving_positions:
+        nr, nc = r + dr, c + dc
+        if board[nr][nc] in (actor_player, 3):
+            moved_positions.append((nr, nc))
 
-    if actor_player in (1,2) and (dr != 0 or dc != 0):
-
-        # Correct: derive moved positions from new board state
-        moved_positions = []
-        for (r, c) in cluster_positions:
-            nr, nc = r + dr, c + dc
-            if board[nr][nc] in (actor_player, 3):
-                moved_positions.append((nr, nc))
-
-        for (nr, nc) in moved_positions:
-            moved_pol = polarities[nr][nc]
-            if moved_pol not in ("+","-"):
-                continue
-
-            for ddr, ddc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                ar, ac = nr+ddr, nc+ddc
-                if not (0 <= ar < rows and 0 <= ac < cols):
-                    continue
-
-                if board[ar][ac] != 3:   # must be neutral
-                    continue
-
-                neigh_pol = polarities[ar][ac]
-                if neigh_pol in ("+","-") and neigh_pol != moved_pol:
-                    board[ar][ac] = actor_player
-                    converted_cells.append((ar, ac))
-
-        # update stats
-        for (cr,cc) in converted_cells:
-            game_state["last_cluster_acquirer"] = actor_player
-            game_state["acquired_clusters"][actor_player] += 1
-
-        if converted_cells:
-            check_winner()
+    # Apply post-move effects (force-pull and conversions)
+    converted_cells = _apply_post_move_effects(moved_positions, actor_player, cluster_positions, new_moving_positions)
 
     # Auto-cluster: find the new cluster starting from first moved piece
     new_cluster = None
-    if actor_player in (1, 2) and new_positions:
-        # Use find_cluster on the first moved position to get the new cluster
-        first_pos = new_positions[0]
-        new_cluster = find_cluster(first_pos[0], first_pos[1])
+    if new_moving_positions:
+        first_pos = new_moving_positions[0]
+        # determine owner after move and pick proper cluster finder
+        owner_after = board[first_pos[0]][first_pos[1]]
+        if owner_after == 3:
+            new_cluster = get_cluster(first_pos[0], first_pos[1])
+        elif owner_after in (1, 2):
+            new_cluster = find_cluster(first_pos[0], first_pos[1])
 
     return True, "Cluster moved." + (" Converted neutrals." if converted_cells else ""), new_cluster
+
+
+def rotate_cluster_cells(cluster, actor_player=None):
+    """
+    Rotate a single 2-cell magnet (cluster of two adjacent cells) 90 degrees clockwise
+    around the first cell in `cluster`.
+    Returns (success, message, new_cluster)
+    """
+    global board, polarities
+
+    if game_state.get("phase") == "ended":
+        return False, "Game over — no moves allowed.", None
+    if dice_value == 0:
+        return False, "You must roll the dice before rotating.", None
+    if actor_player != game_state.get("current_player"):
+        return False, "It's not your turn.", None
+
+    cluster_positions = [tuple(x) for x in cluster]
+    if len(cluster_positions) != 2:
+        return False, "Can only rotate a single 2-cell piece.", None
+
+    (r1, c1), (r2, c2) = cluster_positions
+    # ensure adjacency
+    dr = r2 - r1
+    dc = c2 - c1
+    if (abs(dr) + abs(dc)) != 1:
+        return False, "Cells are not a 2-cell piece.", None
+
+    # require piece to belong to actor (do not rotate opponent pieces)
+    if board[r1][c1] != actor_player or board[r2][c2] != actor_player:
+        return False, "Can only rotate your own pieces.", None
+
+    rows = len(board)
+    cols = len(board[0])
+
+    # compute new offset for second cell after 90° clockwise rotation: (dr,dc) -> (dc, -dr)
+    ndr, ndc = dc, -dr
+    new_r2 = r1 + ndr
+    new_c2 = c1 + ndc
+
+    if not (0 <= new_r2 < rows and 0 <= new_c2 < cols):
+        return False, "Rotation out of bounds.", None
+
+    # allow target if empty or current original cells (we'll clear originals)
+    originals = {(r1, c1), (r2, c2)}
+    if board[new_r2][new_c2] != 0 and (new_r2, new_c2) not in originals:
+        return False, "Rotation blocked.", None
+
+    # perform rotation: clear originals then set new positions
+    new_board = [row[:] for row in board]
+    new_pol = [row[:] for row in polarities]
+
+    # clear originals
+    for (or_r, or_c) in originals:
+        new_board[or_r][or_c] = 0
+        new_pol[or_r][or_c] = ""
+
+    # pivot (r1,c1) stays; second cell moves to (new_r2,new_c2)
+    new_board[r1][c1] = actor_player
+    new_pol[r1][c1] = polarities[r1][c1]
+
+    new_board[new_r2][new_c2] = actor_player
+    new_pol[new_r2][new_c2] = polarities[r2][c2]
+
+    board = new_board
+    polarities = new_pol
+
+    # moved positions list
+    moved_positions = [(r1, c1), (new_r2, new_c2)]
+    new_moving_positions = [(r1, c1), (new_r2, new_c2)]
+
+    # apply post-move effects (force-pull & conversions)
+    converted_cells = _apply_post_move_effects(moved_positions, actor_player, cluster_positions, new_moving_positions)
+
+    # find new cluster
+    new_cluster = None
+    owner_after = board[r1][c1]
+    if owner_after == 3:
+        new_cluster = get_cluster(r1, c1)
+    elif owner_after in (1, 2):
+        new_cluster = find_cluster(r1, c1)
+
+    return True, "Rotated piece." + (" Converted neutrals." if converted_cells else ""), new_cluster
 
 
 # ==============================================================
@@ -342,7 +577,8 @@ def toggle_piece(row, col, orientation):
         if col + dc == 7:
             return False, "Placement touches the forbidden middle column."
 
-    # Phase-based half checks
+
+    # Only allow placement during setup phases
     if phase == "home_setup":
         for (dr, dc), _ in piece:
             if not is_in_half(player, col + dc):
@@ -352,7 +588,8 @@ def toggle_piece(row, col, orientation):
             if not is_in_opponent_half(player, col + dc):
                 return False, f"Neutral piece must be placed on the opponent's half."
     else:
-        return False, f"Cannot place in phase '{phase}'."
+        # Block placement/conversion in main phase or ended phase
+        return False, "Cannot place or convert pieces during main phase."
 
     # Check occupancy
     ok, reason = can_place(piece, row, col)
