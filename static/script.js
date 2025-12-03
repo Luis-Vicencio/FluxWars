@@ -116,7 +116,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const data = await res.json();
         if (data.success) {
             addHistoryEntry('Rotated piece');
-            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
+            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase, data.state);
             if (data.state) updateStatus(data.state);
             // update selected cluster to server-provided new cluster
             selectedCluster = data.new_cluster || [];
@@ -169,7 +169,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (data.success) {
                 updateStatus(data.state);
-                updateBoard(data.board, data.polarities, data.state.phase);
+                updateBoard(data.board, data.polarities, data.state.phase, data.state);
                 clearGhostPreview();
             } else {
                 showModal(`<h3>Invalid placement</h3><p>${data.message || 'That placement is not allowed.'}</p>`);
@@ -204,7 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
             addHistoryEntry(`Player rolled ${diceValue}`);
             // Update UI to reflect new turn/board state returned by server
             if (data.state) updateStatus(data.state);
-            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
+            if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase, data.state);
             // If server indicates steal opportunity (rolled a 6), show steal UI
             if (data.steal_targets && data.steal_targets.length) {
                 showStealOptions(data.steal_targets);
@@ -237,7 +237,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const data = await res.json();
         if (data.success) {
             addHistoryEntry(`Moved cluster by (${dr},${dc})`);
-            updateBoard(data.board, data.polarities, data.state?.phase || "main");
+            updateBoard(data.board, data.polarities, data.state?.phase || "main", data.state);
             if (data.state) updateStatus(data.state);
             // Auto-select the new cluster returned by server for next move
             selectedCluster = data.new_cluster || [];
@@ -258,12 +258,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ======================= RENDER BOARD =======================
 
-function updateBoard(board, polarities, phase = "setup") {
+function updateBoard(board, polarities, phase = "setup", state = null) {
     const boardDiv = document.getElementById("board");
     currentPhase = phase;
     boardDiv.innerHTML = "";
 
     const isMainPhase = (phase === "main");
+    
+    // Get home piece locations from state if available
+    const homePieces = new Set();
+    if (state && state.homes) {
+        // Mark home pieces for both players
+        [1, 2].forEach(player => {
+            if (state.homes[player]) {
+                const [homeRow, homeCol, orientation] = state.homes[player];
+                // Get piece offsets for this orientation
+                const offsets = {
+                    0:   [[0, 0], [0, 1]],
+                    90:  [[0, 0], [1, 0]],
+                    180: [[0, 0], [0, -1]],
+                    270: [[0, 0], [-1, 0]]
+                }[orientation] || [[0, 0], [0, 1]];
+                
+                offsets.forEach(([dr, dc]) => {
+                    homePieces.add(`${homeRow + dr},${homeCol + dc}`);
+                });
+            }
+        });
+    }
 
     for (let r = 0; r < board.length; r++) {
         const rowDiv = document.createElement("div");
@@ -279,6 +301,11 @@ function updateBoard(board, polarities, phase = "setup") {
             if (value === 1) cell.classList.add("player1");
             else if (value === 2) cell.classList.add("player2");
             else if (value === 3) cell.classList.add("neutral");
+
+            // Mark home pieces
+            if (homePieces.has(`${r},${c}`)) {
+                cell.classList.add("home-piece");
+            }
 
             if (!isMainPhase && c === 7) {
                 cell.classList.add("border-cell");
@@ -326,69 +353,92 @@ function updateBoard(board, polarities, phase = "setup") {
 
 // Show steal options in the modal; targets is array of [r,c]
 function showStealOptions(targets) {
-    const body = document.getElementById('modalBody');
-    if (!body) return;
-    // highlight stealable cells on board
-    document.querySelectorAll('.cell.stealable').forEach(c => c.classList.remove('stealable'));
+    // Simply make all stealable targets draggable - no modal menu
+    addHistoryEntry('Roll 6: Drag opponent piece to steal');
+    document.querySelectorAll('.cell.stealable').forEach(c => {
+        c.classList.remove('stealable');
+        c.removeAttribute('draggable');
+        c.ondragstart = null;
+        c.ondragend = null;
+        c.style.opacity = '1';
+    });
     targets.forEach(([r,c]) => {
         const cell = document.querySelector(`.cell[data-row='${r}'][data-col='${c}']`);
-        if (cell) cell.classList.add('stealable');
-    });
-
-    // build list in modal
-    let html = '<h3>Steal Opportunity!</h3>';
-    html += '<p>Select a neutral piece to steal (or close to skip):</p>';
-    html += '<div class="steal-list">';
-    targets.forEach(([r,c]) => {
-        html += `<div class="target" data-row="${r}" data-col="${c}">Neutral at (${r}, ${c})</div>`;
-    });
-    html += '</div>';
-    html += '<div class="steal-actions"><button id="stealCloseBtn">Close</button></div>';
-    body.innerHTML = html;
-    const modal = document.getElementById('modal');
-    modal.style.display = 'block';
-
-    // attach handlers
-    document.querySelectorAll('.steal-list .target').forEach(el => {
-        el.addEventListener('click', async (e) => {
-            const r = el.getAttribute('data-row');
-            const c = el.getAttribute('data-col');
-            // call server to perform steal
-            const res = await fetch('/steal', {
-                method: 'POST',
-                headers: { 'Content-Type':'application/json' },
-                body: JSON.stringify({ row: parseInt(r), col: parseInt(c) })
-            });
-            const data = await res.json();
-            // remove highlights
-            document.querySelectorAll('.cell.stealable').forEach(cel => cel.classList.remove('stealable'));
-            modal.style.display = 'none';
-            if (data.success) {
-                addHistoryEntry('Stole neutral piece');
-                // animate converted cells if server provided them
-                if (data.converted && data.converted.length) {
-                    data.converted.forEach(([rr, cc]) => {
-                        const cell = document.querySelector(`.cell[data-row='${rr}'][data-col='${cc}']`);
-                        if (cell) {
-                            cell.classList.add('converted');
-                            setTimeout(() => cell.classList.remove('converted'), 700);
-                        }
-                    });
-                }
-                if (data.board && data.polarities) updateBoard(data.board, data.polarities, data.state?.phase || currentPhase);
-                if (data.state) updateStatus(data.state);
-            } else {
-                showModal(`<h3>Steal failed</h3><p>${data.message || 'No valid steal action available.'}</p>`);
-            }
-        });
-    });
-
-    const closeBtn = document.getElementById('stealCloseBtn');
-    if (closeBtn) closeBtn.addEventListener('click', () => {
-        document.querySelectorAll('.cell.stealable').forEach(cel => cel.classList.remove('stealable'));
-        modal.style.display = 'none';
+        // Skip home pieces - they should not be stealable
+        if (cell && !cell.classList.contains('home-piece')) {
+            cell.classList.add('stealable');
+            cell.setAttribute('draggable', 'true');
+            cell.ondragstart = (ev) => {
+                ev.dataTransfer.setData('text/plain', JSON.stringify({ r, c }));
+                ev.dataTransfer.effectAllowed = 'move';
+                cell.style.opacity = '0.5';
+            };
+            cell.ondragend = () => {
+                cell.style.opacity = '1';
+            };
+        }
     });
 }
+
+// Allow dropping anywhere on the board to trigger steal
+document.addEventListener('dragover', (ev) => {
+    const target = ev.target.closest('.cell');
+    if (target) {
+        // Allow drop anywhere when dragging a stealable piece
+        const board = document.getElementById('board');
+        if (board && board.querySelector('.cell.stealable')) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+        }
+    }
+});
+
+document.addEventListener('drop', async (ev) => {
+    const target = ev.target.closest('.cell');
+    if (!target) return;
+    
+    // Check if we're dragging a stealable piece
+    const board = document.getElementById('board');
+    if (!board || !board.querySelector('.cell.stealable')) return;
+    
+    ev.preventDefault();
+    const data = ev.dataTransfer.getData('text/plain');
+    
+    // Get target drop coordinates
+    const targetRow = parseInt(target.dataset.row);
+    const targetCol = parseInt(target.dataset.col);
+    
+    try {
+        const { r, c } = JSON.parse(data);
+        const res = await fetch('/steal', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/json' },
+            body: JSON.stringify({ 
+                source_row: parseInt(r), 
+                source_col: parseInt(c),
+                target_row: targetRow,
+                target_col: targetCol
+            })
+        });
+        const json = await res.json();
+        document.querySelectorAll('.cell.stealable').forEach(cel => {
+            cel.classList.remove('stealable');
+            cel.removeAttribute('draggable');
+            cel.ondragstart = null;
+            cel.ondragend = null;
+            cel.style.opacity = '1';
+        });
+        if (json.success) {
+            addHistoryEntry('Stole opponent magnet');
+            if (json.board && json.polarities) updateBoard(json.board, json.polarities, json.state?.phase || currentPhase, json.state);
+            if (json.state) updateStatus(json.state);
+        } else {
+            showModal(`<h3>Steal failed</h3><p>${json.message || 'Unable to steal.'}</p>`);
+        }
+    } catch (e) {
+        showModal('<h3>Steal error</h3><p>There was an error processing the steal.</p>');
+    }
+});
 
 // ======================= STATUS =======================
 
@@ -493,7 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/end_turn', { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                updateBoard(data.board, data.polarities, data.state.phase);
+                updateBoard(data.board, data.polarities, data.state.phase, data.state);
                 updateStatus(data.state);
                 addHistoryEntry('Player ended turn early');
                 diceValue = 0;
@@ -561,7 +611,7 @@ function showWinnerAnimation(player) {
         const data = await res.json();
         if (data.success) {
             if (overlay.parentNode) overlay.remove();
-            updateBoard(data.board, data.polarities, data.state.phase);
+            updateBoard(data.board, data.polarities, data.state.phase, data.state);
             updateStatus(data.state);
         }
     };

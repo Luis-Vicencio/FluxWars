@@ -85,7 +85,39 @@ h1 { margin-bottom: 20px; }
 }
 
 /* Steal highlight */
-.cell.stealable { outline: 3px dashed gold; outline-offset: -3px; }
+.cell.home-piece {
+    position: relative;
+}
+
+.cell.stealable { 
+    outline: 3px dashed gold; 
+    outline-offset: -3px; 
+    cursor: grab;
+    animation: pulse-steal 1.5s ease-in-out infinite;
+    pointer-events: auto;
+}
+
+.cell.stealable:active {
+    cursor: grabbing;
+}
+
+.cell.home-piece.stealable {
+    outline: none;
+    animation: none;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+@keyframes pulse-steal {
+    0%, 100% { 
+        outline-color: gold; 
+        box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+    }
+    50% { 
+        outline-color: orange; 
+        box-shadow: 0 0 20px rgba(255, 165, 0, 0.8);
+    }
+}
 .steal-list { display: flex; flex-direction: column; }
 .steal-list .target { padding: 8px 10px; margin: 6px 0; border-radius: 6px; background: #fff8dc; cursor: pointer; border: 1px solid #ffd27f; }
 .steal-list .target:hover { background: #fff2b8; }
